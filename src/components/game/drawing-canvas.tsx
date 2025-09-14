@@ -27,32 +27,48 @@ export const DrawingCanvas = forwardRef<HTMLCanvasElement, DrawingCanvasProps>((
     context.clearRect(0, 0, canvas.width, canvas.height);
 
     let lastSettings = { color: '#000', brushSize: 5 };
+    let currentPath: DrawingPoint[] = [];
+
+    const drawPath = (path: DrawingPoint[]) => {
+      if(path.length < 2) return;
+      
+      const firstPoint = path[0];
+      context.strokeStyle = firstPoint.settings.color;
+      context.lineWidth = firstPoint.settings.brushSize;
+      
+      context.beginPath();
+      context.moveTo(firstPoint.coords.x, firstPoint.coords.y);
+
+      path.forEach(p => {
+        context.lineTo(p.coords.x, p.coords.y);
+      });
+      context.stroke();
+    }
     
-    points.forEach((p) => {
+    points.forEach((p, index) => {
         if(p.type === 'clear') {
             context.clearRect(0, 0, canvas.width, canvas.height);
+            currentPath = [];
             return;
         }
-        
-        const { x, y, type } = p.coords;
 
-        if (p.settings.color !== lastSettings.color) {
-            context.strokeStyle = p.settings.color;
-            lastSettings.color = p.settings.color;
-        }
-        if (p.settings.brushSize !== lastSettings.brushSize) {
-            context.lineWidth = p.settings.brushSize;
-            lastSettings.brushSize = p.settings.brushSize;
+        if (p.type === 'start') {
+            if(currentPath.length > 0) {
+              drawPath(currentPath);
+            }
+            currentPath = [p];
+        } else if (p.type === 'draw') {
+             currentPath.push(p);
+        } else if (p.type === 'end') {
+            if(currentPath.length > 0) {
+              currentPath.push(p);
+              drawPath(currentPath);
+            }
+            currentPath = [];
         }
 
-        if (type === 'start') {
-            context.beginPath();
-            context.moveTo(x, y);
-        } else if (type === 'draw') {
-            context.lineTo(x, y);
-            context.stroke();
-        } else {
-            context.closePath();
+        if(index === points.length -1 && currentPath.length > 0) {
+            drawPath(currentPath);
         }
     });
   };
@@ -71,30 +87,27 @@ export const DrawingCanvas = forwardRef<HTMLCanvasElement, DrawingCanvasProps>((
         
         const currentDrawing = contextRef.current?.getImageData(0,0,canvas.width, canvas.height);
 
-        canvas.width = width * dpr;
-        canvas.height = height * dpr;
-        canvas.style.width = `${width}px`;
-        canvas.style.height = `${height}px`;
+        canvas.width = width;
+        canvas.height = height;
 
         const context = canvas.getContext('2d');
         if (context) {
-            context.scale(dpr, dpr);
             context.lineCap = 'round';
+            context.lineJoin = 'round';
             contextRef.current = context;
-            if(currentDrawing) {
-                // This is a simplified redraw on resize. For perfect scaling, one would need to scale the drawing commands.
-                redraw(initialPoints);
-            }
+            redraw(initialPoints);
         }
     });
 
     resizeObserver.observe(parent);
 
     return () => resizeObserver.disconnect();
-  }, [initialPoints]); // Should not depend on tool settings
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     redraw(initialPoints);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialPoints]);
 
 
@@ -112,10 +125,9 @@ export const DrawingCanvas = forwardRef<HTMLCanvasElement, DrawingCanvasProps>((
     const event = e instanceof MouseEvent ? e : e.touches[0];
     if(!event) return { x: 0, y: 0};
     
-    const dpr = window.devicePixelRatio || 1;
     return { 
-        x: (event.clientX - rect.left) * dpr, 
-        y: (event.clientY - rect.top) * dpr 
+        x: (event.clientX - rect.left), 
+        y: (event.clientY - rect.top)
     };
   }
 
@@ -123,7 +135,16 @@ export const DrawingCanvas = forwardRef<HTMLCanvasElement, DrawingCanvasProps>((
     if (!isDrawer) return;
     e.preventDefault();
     const { x, y } = getCoords(e.nativeEvent);
-    onDraw({ type: 'start', coords: { x, y }, settings: toolSettings });
+    const pointData = { type: 'start' as const, coords: { x, y }, settings: toolSettings };
+    onDraw(pointData);
+    
+    const context = contextRef.current;
+    if(!context) return;
+    context.strokeStyle = toolSettings.color;
+    context.lineWidth = toolSettings.brushSize;
+    context.beginPath();
+    context.moveTo(x, y);
+
     setIsDrawing(true);
     lastPointRef.current = { x, y };
   };
@@ -131,6 +152,10 @@ export const DrawingCanvas = forwardRef<HTMLCanvasElement, DrawingCanvasProps>((
   const finishDrawing = (e: React.MouseEvent<HTMLCanvasElement> | React.TouchEvent<HTMLCanvasElement>) => {
     if (!isDrawer || !isDrawing) return;
     e.preventDefault();
+    
+    const context = contextRef.current;
+    if(context) context.closePath();
+    
     setIsDrawing(false);
     lastPointRef.current = null;
     onDraw({ type: 'end', coords: { x: -1, y: -1 }, settings: toolSettings }); // Dummy coords
@@ -143,12 +168,17 @@ export const DrawingCanvas = forwardRef<HTMLCanvasElement, DrawingCanvasProps>((
     if(lastPointRef.current && (Math.abs(lastPointRef.current.x - x) < 2 && Math.abs(lastPointRef.current.y - y) < 2)){
         return; // Debounce points that are too close
     }
+
+    const context = contextRef.current;
+    if(context) {
+        context.lineTo(x, y);
+        context.stroke();
+    }
+    
     onDraw({ type: 'draw', coords: { x, y }, settings: toolSettings });
     lastPointRef.current = { x, y };
   };
   
-  const dpr = typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1;
-
   return (
     <>
         <canvas
@@ -172,5 +202,3 @@ export const DrawingCanvas = forwardRef<HTMLCanvasElement, DrawingCanvasProps>((
 });
 
 DrawingCanvas.displayName = 'DrawingCanvas';
-
-    
