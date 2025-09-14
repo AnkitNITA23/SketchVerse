@@ -7,7 +7,7 @@ import { onAuthStateChanged, User } from 'firebase/auth';
 import { auth, db } from '@/lib/firebase';
 import { doc, onSnapshot, collection, addDoc, serverTimestamp, query, orderBy, runTransaction, Timestamp, writeBatch, getDocs, getDoc } from 'firebase/firestore';
 import { Loader2 } from 'lucide-react';
-import type { GameState, Player, Message, ToolSettings, DrawingPoint, Game } from '@/lib/types';
+import type { Game, Player, Message, ToolSettings, DrawingPoint } from '@/lib/types';
 import { getAiHintAction } from '@/app/actions';
 import { MOCK_WORD_LIST } from '@/lib/mock-data';
 
@@ -65,7 +65,7 @@ export default function GameRoom() {
             if (!gameDoc.exists()) throw new Error("Game not found!");
             
             const currentPlayersSnapshot = await getDocs(query(playersColRef, orderBy('joinedAt')));
-            const currentPlayers = currentPlayersSnapshot.docs.map(doc => doc.data() as Player);
+            const currentPlayers = currentPlayersSnapshot.docs.map(d => ({ id: d.id, ...d.data() } as Player));
 
             let { round, currentDrawerId } = gameDoc.data() as Game;
 
@@ -93,28 +93,30 @@ export default function GameRoom() {
                 correctGuessers: []
             });
             
-            // Clear canvas and add system message in separate batch
+            // Non-critical updates can be batched outside the transaction for performance
         });
 
-        // These are non-critical updates, can be outside the main transaction
         const batch = writeBatch(db);
+        const drawingPointsCollection = collection(db, 'rooms', roomId as string, 'drawingPoints');
         const clearPoint: DrawingPoint = { type: 'clear', timestamp: serverTimestamp() };
-        batch.set(doc(collection(db, 'rooms', roomId as string, 'drawingPoints')), clearPoint);
+        batch.set(doc(drawingPointsCollection), clearPoint);
 
         const playersColRef = collection(db, 'rooms', roomId as string, 'players');
         const currentPlayersSnapshot = await getDocs(query(playersColRef, orderBy('joinedAt')));
-        const currentPlayers = currentPlayersSnapshot.docs.map(doc => doc.data() as Player);
+        const currentPlayers = currentPlayersSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Player));
+
         const gameDocRef = doc(db, 'rooms', roomId as string, 'game', 'gameState');
         const gameDoc = await getDoc(gameDocRef);
         const { currentDrawerId } = gameDoc.data() as Game;
         const nextDrawer = currentPlayers.find(p => p.id === currentDrawerId);
-
+        
+        const messagesCollection = collection(db, 'rooms', roomId as string, 'messages');
         const systemMessage = {
             text: `${nextDrawer?.name} is now drawing!`,
             type: 'system' as const,
             timestamp: serverTimestamp()
         };
-        batch.set(doc(collection(db, 'rooms', roomId as string, 'messages')), systemMessage);
+        batch.set(doc(messagesCollection), systemMessage);
         
         await batch.commit();
 
@@ -135,14 +137,16 @@ export default function GameRoom() {
         if(docSnap.exists()) {
             setGame(docSnap.data() as Game);
         } else {
-            setGame(null);
+            // If game state is deleted or doesn't exist, go back to lobby
+            toast({ title: 'Game has ended', description: 'Returning to the lobby.' });
             router.push(`/room/${roomId}`);
+            setGame(null);
         }
         setLoading(false);
     });
     
     const unsubPlayers = onSnapshot(query(playersColRef, orderBy('joinedAt')), (snapshot) => {
-        const playersList = snapshot.docs.map(doc => doc.data() as Player);
+        const playersList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data()} as Player));
         setPlayers(playersList);
     });
 
@@ -182,6 +186,9 @@ export default function GameRoom() {
     if (turnTimeoutRef.current) {
         clearTimeout(turnTimeoutRef.current);
     }
+
+    if (game?.status !== 'playing') return;
+
     if (game?.turnEndsAt && isHost) {
         const turnEndTime = (game.turnEndsAt as Timestamp).toMillis();
         const now = Date.now();
@@ -191,23 +198,25 @@ export default function GameRoom() {
             turnTimeoutRef.current = setTimeout(() => {
                 startNextTurn();
             }, delay);
-        } else {
-            // If the time has already passed, trigger next turn immediately.
+        } else if (delay <= 0) {
             startNextTurn();
         }
     }
     return () => {
         if(turnTimeoutRef.current) clearTimeout(turnTimeoutRef.current);
     }
-  }, [game?.turnEndsAt, isHost, startNextTurn]);
+  }, [game?.turnEndsAt, game?.status, isHost, startNextTurn]);
 
   const handleSendMessage = async (text: string) => {
-    if (!user || !roomId || !text.trim() || !game) return;
+    if (!user || !roomId || !text.trim() || !game || game.status !== 'playing' || game.currentDrawerId === user.uid) return;
 
     const guessText = text.trim();
     const isCorrect = guessText.toLowerCase() === game.currentWord.toLowerCase();
     
     if (isCorrect) {
+        // You can't guess your own word
+        if (game.correctGuessers.includes(user.uid)) return;
+
         try {
             await runTransaction(db, async (transaction) => {
                 const gameDocRef = doc(db, 'rooms', roomId, 'game', 'gameState');
@@ -218,7 +227,7 @@ export default function GameRoom() {
                 const playerDoc = await transaction.get(playerDocRef);
                 const drawerDoc = await transaction.get(drawerDocRef);
 
-                if (!gameDoc.exists() || !playerDoc.exists() || !drawerDoc.exists()) throw "Game or player not found";
+                if (!gameDoc.exists() || !playerDoc.exists() || !drawerDoc.exists()) throw new Error("Game or player not found");
                 if (gameDoc.data().correctGuessers?.includes(user.uid)) return; // Already guessed
 
                 const guesserPoints = 100; // Example points
@@ -235,15 +244,17 @@ export default function GameRoom() {
                     playerName: playerDoc.data()?.name || 'Anonymous',
                     timestamp: serverTimestamp()
                 };
-                transaction.set(doc(collection(db, 'rooms', roomId, 'messages')), correctMsg);
+                const messagesCollection = collection(db, 'rooms', roomId, 'messages');
+                transaction.set(doc(messagesCollection), correctMsg);
             });
             // After successful transaction, host checks if turn should end
             if (isHost) {
                 const gameDocAfter = await getDoc(doc(db, 'rooms', roomId, 'game', 'gameState'));
                 if (gameDocAfter.exists()) {
                     const { correctGuessers } = gameDocAfter.data();
-                    const nonDrawerPlayers = players.filter(p => p.id !== game.currentDrawerId);
-                    if (correctGuessers.length >= nonDrawerPlayers.length) {
+                    const playersSnapshot = await getDocs(collection(db, 'rooms', roomId, 'players'));
+                    const nonDrawerPlayersCount = playersSnapshot.size - 1;
+                    if (correctGuessers.length >= nonDrawerPlayersCount) {
                         await startNextTurn();
                     }
                 }
@@ -273,7 +284,7 @@ export default function GameRoom() {
   const handleGetHint = async () => {
     if (!game) return;
     const drawingDescription = "A player's drawing"; // In a more advanced version, this could come from canvas analysis
-    const recentGuesses = messages.filter(m => m.type === 'guess').map(m => m.text);
+    const recentGuesses = messages.filter(m => m.type === 'guess').slice(-5).map(m => m.text); // Get last 5 guesses
     
     const hint = await getAiHintAction(drawingDescription, recentGuesses);
     
@@ -282,11 +293,15 @@ export default function GameRoom() {
         type: 'hint' as const,
         timestamp: serverTimestamp()
     };
-    await addDoc(collection(db, 'rooms', roomId as string, 'messages'), hintMsg);
+    try {
+        await addDoc(collection(db, 'rooms', roomId as string, 'messages'), hintMsg);
+    } catch(error) {
+        toast({title: "Couldn't get a hint right now.", variant: 'destructive'})
+    }
   };
 
   const handleClearCanvas = async () => {
-    if (!roomId) return;
+    if (!roomId || !user || game?.currentDrawerId !== user.uid) return;
     const clearPoint: DrawingPoint = {
         type: 'clear',
         timestamp: serverTimestamp()
@@ -295,14 +310,14 @@ export default function GameRoom() {
   };
   
   const handleDraw = async (point: Omit<DrawingPoint, 'timestamp'>) => {
-    if (!roomId) return;
+    if (!roomId || !user || game?.currentDrawerId !== user.uid) return;
     await addDoc(collection(db, 'rooms', roomId as string, 'drawingPoints'), {
         ...point,
         timestamp: serverTimestamp(),
     });
   }
 
-  if (loading || !game || !user) {
+  if (loading || !user) {
     return (
       <div className="flex flex-col items-center justify-center min-h-screen gap-4 text-center">
         <Loader2 className="w-16 h-16 animate-spin text-primary" />
@@ -311,9 +326,19 @@ export default function GameRoom() {
       </div>
     );
   }
+
+  if (!game) {
+     return (
+      <div className="flex flex-col items-center justify-center min-h-screen gap-4 text-center">
+        <Loader2 className="w-16 h-16 animate-spin text-primary" />
+        <h1 className="text-3xl font-bold">Waiting for game to start...</h1>
+        <p className="text-muted-foreground">The host is setting things up!</p>
+      </div>
+    );
+  }
   
   const isDrawer = game.currentDrawerId === user.uid;
-  const youGuessedIt = game.correctGuessers?.includes(user.uid);
+  const youGuessedIt = !!game.correctGuessers?.includes(user.uid);
   const turnEndsAt = game.turnEndsAt ? (game.turnEndsAt as Timestamp).toMillis() : Date.now() + (TURN_DURATION * 1000);
 
   return (
@@ -363,5 +388,3 @@ export default function GameRoom() {
     </main>
   );
 }
-
-    

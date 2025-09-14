@@ -113,10 +113,10 @@ export default function RoomLobby() {
   }, [roomId]);
   
   useEffect(() => {
-    if(!user) return;
+    if(!user || !roomId) return;
     
     const q = query(collection(db, 'rooms', roomId as string, 'players'), orderBy('joinedAt'));
-    const unsubscribe = onSnapshot(q, (snapshot) => {
+    const unsubscribePlayers = onSnapshot(q, (snapshot) => {
       const playersList = snapshot.docs.map(doc => doc.data() as Player);
       setPlayers(playersList);
     });
@@ -129,7 +129,7 @@ export default function RoomLobby() {
     });
 
     return () => {
-        unsubscribe();
+        unsubscribePlayers();
         gameSub();
     }
   }, [user, roomId, router]);
@@ -155,6 +155,7 @@ export default function RoomLobby() {
   }
 
   const copyRoomId = () => {
+    if (!roomId) return;
     navigator.clipboard.writeText(roomId as string);
     toast({
       title: 'Copied to Clipboard!',

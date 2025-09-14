@@ -57,18 +57,12 @@ const Timer: FC<{ turnEndsAt: number }> = ({ turnEndsAt }) => {
 
 export const ChatPanel: FC<ChatPanelProps> = ({ messages, turnEndsAt, isDrawer, isGuessed, onSendMessage, onGetHint }) => {
   const [guess, setGuess] = useState('');
-  const scrollAreaRef = useRef<HTMLDivElement>(null);
+  const scrollAreaViewportRef = useRef<HTMLDivElement>(null);
   
   useEffect(() => {
-    // A slight delay to allow the DOM to update before scrolling
-    setTimeout(() => {
-        if (scrollAreaRef.current) {
-          const scrollableNode = scrollAreaRef.current.children[0].children[0] as HTMLElement;
-          if(scrollableNode) {
-            scrollableNode.scrollTo({ top: scrollableNode.scrollHeight, behavior: 'smooth' });
-          }
-        }
-    }, 100);
+    if (scrollAreaViewportRef.current) {
+      scrollAreaViewportRef.current.scrollTo({ top: scrollAreaViewportRef.current.scrollHeight, behavior: 'smooth' });
+    }
   }, [messages]);
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -85,11 +79,11 @@ export const ChatPanel: FC<ChatPanelProps> = ({ messages, turnEndsAt, isDrawer, 
         <Timer turnEndsAt={turnEndsAt} />
       </CardHeader>
       <CardContent className="flex-1 overflow-hidden p-0">
-        <ScrollArea className="h-full" ref={scrollAreaRef}>
+        <ScrollArea className="h-full" viewportRef={scrollAreaViewportRef}>
           <div className="p-4 space-y-4">
-            {messages.map((msg) => (
+            {messages.map((msg, index) => (
               <div
-                key={msg.id}
+                key={msg.id || index}
                 className={cn(
                   'flex items-start gap-3 text-sm',
                   (msg.type === 'system' || msg.type === 'hint') && 'justify-center',
@@ -104,7 +98,7 @@ export const ChatPanel: FC<ChatPanelProps> = ({ messages, turnEndsAt, isDrawer, 
                     <div className="flex-1">
                       <p className="font-semibold">{msg.playerName}</p>
                       <p className={cn("text-muted-foreground", msg.type === 'correct' && "text-yellow-400 font-bold")}>
-                        {msg.type === 'correct' ? `${msg.playerName} guessed the word!` : msg.text}
+                        {msg.type === 'correct' ? `Guessed the word!` : msg.text}
                       </p>
                     </div>
                      {msg.type === 'correct' && <PartyPopper className="w-5 h-5 text-yellow-400" />}
@@ -151,5 +145,3 @@ export const ChatPanel: FC<ChatPanelProps> = ({ messages, turnEndsAt, isDrawer, 
     </Card>
   );
 };
-
-    
