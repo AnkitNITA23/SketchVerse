@@ -5,11 +5,10 @@ import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
-import { Gamepad2, Pencil, Users } from 'lucide-react';
+import { Pencil, Users, Wand2 } from 'lucide-react';
+import { Doodles } from '@/components/doodles';
 
 const createRoom = async () => {
-  // A real implementation would call a server action or API route
-  // to create a unique room ID in Firebase.
   const roomId = Math.random().toString(36).substring(2, 8).toUpperCase();
   return roomId;
 };
@@ -35,64 +34,65 @@ export default function HomePage() {
   };
 
   return (
-    <main className="flex min-h-screen flex-col items-center justify-center bg-background p-8">
-      <div className="flex items-center gap-4 mb-8">
-        <Gamepad2 className="text-primary h-12 w-12" />
-        <h1 className="text-5xl font-bold tracking-tighter text-foreground">
+    <main className="flex min-h-screen flex-col items-center justify-center p-8 overflow-hidden relative">
+        <Doodles />
+      <div className="text-center mb-12 z-10 animate-bounce-in">
+        <h1 className="text-6xl md:text-8xl font-black tracking-tighter text-transparent bg-clip-text bg-gradient-to-br from-primary to-secondary">
           SketchVerse
         </h1>
+        <p className="max-w-2xl mx-auto mt-4 text-lg text-muted-foreground">
+            Where your silly doodles become legendary masterpieces. <br/> Draw, guess, and laugh your heart out with friends!
+        </p>
       </div>
-      <p className="max-w-xl text-center text-lg text-muted-foreground mb-12">
-        Unleash your inner artist in a real-time multiplayer drawing and guessing game. Create a room, invite your friends, and let the fun begin!
-      </p>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-8 w-full max-w-4xl">
-        <Card className="flex flex-col">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-8 w-full max-w-4xl z-10">
+        <Card className="flex flex-col bg-card/80 backdrop-blur-sm border-primary/20 animate-bounce-in" style={{animationDelay: '0.2s'}}>
           <CardHeader className="text-center">
-            <div className="mx-auto bg-primary/10 p-4 rounded-full w-fit mb-4">
-                <Pencil className="h-8 w-8 text-primary" />
+            <div className="mx-auto bg-primary/10 p-4 rounded-full w-fit mb-4 border-2 border-primary/30">
+                <Wand2 className="h-8 w-8 text-primary" />
             </div>
-            <CardTitle>Create a New Room</CardTitle>
-            <CardDescription>Start a new game and invite your friends to join.</CardDescription>
+            <CardTitle className="text-2xl font-bold">Create a New Game</CardTitle>
+            <CardDescription>Start a party and invite your friends to the fun zone.</CardDescription>
           </CardHeader>
           <CardContent className="flex-grow flex items-center justify-center">
             <Button
               size="lg"
               onClick={handleCreateRoom}
               disabled={isCreating || isJoining}
+              className="font-bold text-lg shadow-lg shadow-primary/20 hover:scale-105 transition-transform"
             >
-              {isCreating ? 'Creating...' : 'Create Room'}
+              {isCreating ? 'Summoning a Room...' : 'Create Room'}
             </Button>
           </CardContent>
         </Card>
 
-        <Card className="flex flex-col">
+        <Card className="flex flex-col bg-card/80 backdrop-blur-sm border-secondary/20 animate-bounce-in" style={{animationDelay: '0.4s'}}>
           <CardHeader className="text-center">
-            <div className="mx-auto bg-primary/10 p-4 rounded-full w-fit mb-4">
-                <Users className="h-8 w-8 text-primary" />
+            <div className="mx-auto bg-secondary/10 p-4 rounded-full w-fit mb-4 border-2 border-secondary/30">
+                <Users className="h-8 w-8 text-secondary" />
             </div>
-            <CardTitle>Join an Existing Room</CardTitle>
-            <CardDescription>Enter a room code to jump into a game with friends.</CardDescription>
+            <CardTitle className="text-2xl font-bold">Join the Shenanigans</CardTitle>
+            <CardDescription>Got a secret code? Jump into an existing game.</CardDescription>
           </CardHeader>
           <CardContent className="flex-grow flex items-center justify-center">
             <form onSubmit={handleJoinRoom} className="flex flex-col gap-4 w-full max-w-sm">
               <Input
                 type="text"
-                placeholder="Enter Room Code"
+                placeholder="ENTER SECRET CODE"
                 value={roomCode}
                 onChange={(e) => setRoomCode(e.target.value)}
-                className="text-center text-lg tracking-widest font-mono"
+                className="text-center text-xl tracking-widest font-black"
                 maxLength={6}
               />
-              <Button type="submit" size="lg" disabled={isCreating || isJoining || !roomCode.trim()}>
-                {isJoining ? 'Joining...' : 'Join Room'}
+              <Button variant="secondary" type="submit" size="lg" disabled={isCreating || isJoining || !roomCode.trim()} className="font-bold text-lg shadow-lg shadow-secondary/20 hover:scale-105 transition-transform">
+                {isJoining ? 'Crashing the Party...' : 'Join Room'}
               </Button>
             </form>
           </CardContent>
         </Card>
       </div>
-      <footer className="mt-16 text-sm text-muted-foreground">
-        <p>Built with Next.js, Firebase, and a sprinkle of AI magic ✨</p>
+      <footer className="mt-16 text-sm text-muted-foreground z-10">
+        <p>Crafted with AI magic & pixels ✨</p>
       </footer>
     </main>
   );
