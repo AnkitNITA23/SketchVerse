@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Image from 'next/image';
-import { doc, onSnapshot, collection, query, getDocs, runTransaction, updateDoc, serverTimestamp, setDoc, Timestamp, getDoc } from 'firebase/firestore';
+import { doc, onSnapshot, collection, query, getDocs, runTransaction, updateDoc, serverTimestamp, setDoc, Timestamp, getDoc, addDoc } from 'firebase/firestore';
 import { auth, db } from '@/lib/firebase';
 import { onAuthStateChanged, signInAnonymously, User } from 'firebase/auth';
 
@@ -20,6 +20,7 @@ import { MOCK_WORD_LIST } from '@/lib/mock-data';
 import { cn } from '@/lib/utils';
 
 const TURN_DURATION = 90; // 90 seconds
+const TOTAL_ROUNDS = 5;
 
 export default function RoomLobby() {
   const { roomId } = useParams();
@@ -184,6 +185,7 @@ export default function RoomLobby() {
             currentWord: word,
             currentDrawerId: firstDrawer.id,
             round: 1,
+            totalRounds: TOTAL_ROUNDS,
             turnEndsAt: Timestamp.fromMillis(Date.now() + TURN_DURATION * 1000),
             correctGuessers: []
         });

@@ -5,7 +5,7 @@ import { useParams, useRouter } from 'next/navigation';
 import { useToast } from '@/hooks/use-toast';
 import { onAuthStateChanged, User } from 'firebase/auth';
 import { auth, db } from '@/lib/firebase';
-import { doc, onSnapshot, collection, addDoc, serverTimestamp, query, orderBy, runTransaction, Timestamp, writeBatch } from 'firebase/firestore';
+import { doc, onSnapshot, collection, addDoc, serverTimestamp, query, orderBy, runTransaction, Timestamp, writeBatch, getDocs, getDoc } from 'firebase/firestore';
 import { Loader2 } from 'lucide-react';
 import type { GameState, Player, Message, ToolSettings, DrawingPoint, Game } from '@/lib/types';
 import { getAiHintAction } from '@/app/actions';
@@ -64,7 +64,7 @@ export default function GameRoom() {
             const gameDoc = await transaction.get(gameDocRef);
             if (!gameDoc.exists()) throw new Error("Game not found!");
             
-            const currentPlayersSnapshot = await transaction.get(query(playersColRef, orderBy('joinedAt')));
+            const currentPlayersSnapshot = await getDocs(query(playersColRef, orderBy('joinedAt')));
             const currentPlayers = currentPlayersSnapshot.docs.map(doc => doc.data() as Player);
 
             let { round, currentDrawerId } = gameDoc.data() as Game;
@@ -74,7 +74,7 @@ export default function GameRoom() {
             const nextDrawer = currentPlayers[nextDrawerIndex];
 
             // If we've looped back to the first player, a round has passed
-            if (nextDrawerIndex < currentDrawerIndex) {
+            if (nextDrawerIndex <= currentDrawerIndex) {
                 round++;
             }
             
@@ -216,15 +216,16 @@ export default function GameRoom() {
 
                 const gameDoc = await transaction.get(gameDocRef);
                 const playerDoc = await transaction.get(playerDocRef);
+                const drawerDoc = await transaction.get(drawerDocRef);
 
-                if (!gameDoc.exists() || !playerDoc.exists()) throw "Game or player not found";
+                if (!gameDoc.exists() || !playerDoc.exists() || !drawerDoc.exists()) throw "Game or player not found";
                 if (gameDoc.data().correctGuessers?.includes(user.uid)) return; // Already guessed
 
                 const guesserPoints = 100; // Example points
                 const drawerPoints = 50;
                 
                 transaction.update(playerDocRef, { score: (playerDoc.data()?.score || 0) + guesserPoints });
-                transaction.update(drawerDocRef, { score: (playerDoc.data()?.score || 0) + drawerPoints });
+                transaction.update(drawerDocRef, { score: (drawerDoc.data()?.score || 0) + drawerPoints });
                 transaction.update(gameDocRef, { correctGuessers: [...(gameDoc.data().correctGuessers || []), user.uid] });
 
                 const correctMsg = { 
@@ -236,12 +237,11 @@ export default function GameRoom() {
                 };
                 transaction.set(doc(collection(db, 'rooms', roomId, 'messages')), correctMsg);
             });
-            // After successful transaction, host triggers next turn
+            // After successful transaction, host checks if turn should end
             if (isHost) {
-                // Check if all players guessed
-                const gameDoc = await getDoc(doc(db, 'rooms', roomId, 'game', 'gameState'));
-                if (gameDoc.exists()) {
-                    const { correctGuessers } = gameDoc.data();
+                const gameDocAfter = await getDoc(doc(db, 'rooms', roomId, 'game', 'gameState'));
+                if (gameDocAfter.exists()) {
+                    const { correctGuessers } = gameDocAfter.data();
                     const nonDrawerPlayers = players.filter(p => p.id !== game.currentDrawerId);
                     if (correctGuessers.length >= nonDrawerPlayers.length) {
                         await startNextTurn();
