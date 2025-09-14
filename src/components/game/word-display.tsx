@@ -3,10 +3,11 @@ import type { FC } from 'react';
 interface WordDisplayProps {
   word: string;
   isDrawer: boolean;
+  youGuessedIt?: boolean;
 }
 
-export const WordDisplay: FC<WordDisplayProps> = ({ word, isDrawer }) => {
-  const display = isDrawer ? word : word.replace(/\w/g, '_');
+export const WordDisplay: FC<WordDisplayProps> = ({ word, isDrawer, youGuessedIt }) => {
+  const display = (isDrawer || youGuessedIt) ? word : word.replace(/\w/g, '_');
 
   return (
     <div className="flex items-center justify-center p-2 rounded-lg bg-card border">
@@ -16,3 +17,5 @@ export const WordDisplay: FC<WordDisplayProps> = ({ word, isDrawer }) => {
     </div>
   );
 };
+
+    

@@ -1,14 +1,15 @@
 'use client';
 
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useState, useRef, useCallback } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { useToast } from '@/hooks/use-toast';
 import { onAuthStateChanged, User } from 'firebase/auth';
 import { auth, db } from '@/lib/firebase';
-import { doc, onSnapshot, collection, addDoc, serverTimestamp, query, orderBy } from 'firebase/firestore';
+import { doc, onSnapshot, collection, addDoc, serverTimestamp, query, orderBy, runTransaction, Timestamp, writeBatch } from 'firebase/firestore';
 import { Loader2 } from 'lucide-react';
 import type { GameState, Player, Message, ToolSettings, DrawingPoint, Game } from '@/lib/types';
 import { getAiHintAction } from '@/app/actions';
+import { MOCK_WORD_LIST } from '@/lib/mock-data';
 
 import { Scoreboard } from '@/components/game/scoreboard';
 import { DrawingCanvas } from '@/components/game/drawing-canvas';
@@ -16,6 +17,9 @@ import { ChatPanel } from '@/components/game/chat-panel';
 import { Toolbar } from '@/components/game/toolbar';
 import { WordDisplay } from '@/components/game/word-display';
 import { GameEndDialog } from '@/components/game/game-end-dialog';
+
+const TURN_DURATION = 90; // 90 seconds
+const TOTAL_ROUNDS = 5;
 
 export default function GameRoom() {
   const { roomId } = useParams();
@@ -33,6 +37,9 @@ export default function GameRoom() {
     brushSize: 5,
   });
 
+  const isHost = players.find(p => p.id === user?.uid)?.isHost;
+  const turnTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
   // Auth listener
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (firebaseUser) => {
@@ -45,6 +52,77 @@ export default function GameRoom() {
     });
     return unsubscribe;
   }, [toast, router]);
+  
+  const startNextTurn = useCallback(async () => {
+    if (!isHost || !roomId) return;
+    
+    try {
+        await runTransaction(db, async (transaction) => {
+            const gameDocRef = doc(db, 'rooms', roomId as string, 'game', 'gameState');
+            const playersColRef = collection(db, 'rooms', roomId as string, 'players');
+            
+            const gameDoc = await transaction.get(gameDocRef);
+            if (!gameDoc.exists()) throw new Error("Game not found!");
+            
+            const currentPlayersSnapshot = await transaction.get(query(playersColRef, orderBy('joinedAt')));
+            const currentPlayers = currentPlayersSnapshot.docs.map(doc => doc.data() as Player);
+
+            let { round, currentDrawerId } = gameDoc.data() as Game;
+
+            const currentDrawerIndex = currentPlayers.findIndex(p => p.id === currentDrawerId);
+            const nextDrawerIndex = (currentDrawerIndex + 1) % currentPlayers.length;
+            const nextDrawer = currentPlayers[nextDrawerIndex];
+
+            // If we've looped back to the first player, a round has passed
+            if (nextDrawerIndex < currentDrawerIndex) {
+                round++;
+            }
+            
+            if (round > TOTAL_ROUNDS) {
+                 transaction.update(gameDocRef, { status: 'ended' });
+                 return;
+            }
+
+            const newWord = MOCK_WORD_LIST[Math.floor(Math.random() * MOCK_WORD_LIST.length)];
+
+            transaction.update(gameDocRef, {
+                currentWord: newWord,
+                currentDrawerId: nextDrawer.id,
+                round: round,
+                turnEndsAt: Timestamp.fromMillis(Date.now() + TURN_DURATION * 1000),
+                correctGuessers: []
+            });
+            
+            // Clear canvas and add system message in separate batch
+        });
+
+        // These are non-critical updates, can be outside the main transaction
+        const batch = writeBatch(db);
+        const clearPoint: DrawingPoint = { type: 'clear', timestamp: serverTimestamp() };
+        batch.set(doc(collection(db, 'rooms', roomId as string, 'drawingPoints')), clearPoint);
+
+        const playersColRef = collection(db, 'rooms', roomId as string, 'players');
+        const currentPlayersSnapshot = await getDocs(query(playersColRef, orderBy('joinedAt')));
+        const currentPlayers = currentPlayersSnapshot.docs.map(doc => doc.data() as Player);
+        const gameDocRef = doc(db, 'rooms', roomId as string, 'game', 'gameState');
+        const gameDoc = await getDoc(gameDocRef);
+        const { currentDrawerId } = gameDoc.data() as Game;
+        const nextDrawer = currentPlayers.find(p => p.id === currentDrawerId);
+
+        const systemMessage = {
+            text: `${nextDrawer?.name} is now drawing!`,
+            type: 'system' as const,
+            timestamp: serverTimestamp()
+        };
+        batch.set(doc(collection(db, 'rooms', roomId as string, 'messages')), systemMessage);
+        
+        await batch.commit();
+
+    } catch (error) {
+        console.error("Error starting next turn:", error);
+        toast({ title: "Couldn't start the next turn.", variant: 'destructive'});
+    }
+  }, [isHost, roomId, toast]);
 
   // Game and Players state listener
   useEffect(() => {
@@ -57,9 +135,8 @@ export default function GameRoom() {
         if(docSnap.exists()) {
             setGame(docSnap.data() as Game);
         } else {
-            // Maybe game ended or hasn't started
-            // toast({ title: 'Game not found!', variant: 'destructive' });
-            // router.push(`/room/${roomId}`);
+            setGame(null);
+            router.push(`/room/${roomId}`);
         }
         setLoading(false);
     });
@@ -100,22 +177,96 @@ export default function GameRoom() {
     }
   }, [roomId]);
   
-  const handleSendMessage = async (text: string) => {
-    if (!user || !roomId || !text.trim()) return;
+  // Timer check effect
+  useEffect(() => {
+    if (turnTimeoutRef.current) {
+        clearTimeout(turnTimeoutRef.current);
+    }
+    if (game?.turnEndsAt && isHost) {
+        const turnEndTime = (game.turnEndsAt as Timestamp).toMillis();
+        const now = Date.now();
+        const delay = turnEndTime - now;
 
-    const newMsg = { 
-        text: text.trim(), 
-        type: 'guess' as const, 
-        playerId: user.uid,
-        playerName: players.find(p => p.id === user.uid)?.name || 'Anonymous',
-        timestamp: serverTimestamp()
-    };
+        if (delay > 0) {
+            turnTimeoutRef.current = setTimeout(() => {
+                startNextTurn();
+            }, delay);
+        } else {
+            // If the time has already passed, trigger next turn immediately.
+            startNextTurn();
+        }
+    }
+    return () => {
+        if(turnTimeoutRef.current) clearTimeout(turnTimeoutRef.current);
+    }
+  }, [game?.turnEndsAt, isHost, startNextTurn]);
+
+  const handleSendMessage = async (text: string) => {
+    if (!user || !roomId || !text.trim() || !game) return;
+
+    const guessText = text.trim();
+    const isCorrect = guessText.toLowerCase() === game.currentWord.toLowerCase();
     
-    try {
-        await addDoc(collection(db, 'rooms', roomId as string, 'messages'), newMsg);
-    } catch (error) {
-        console.error("Error sending message: ", error);
-        toast({ title: 'Error sending message', variant: 'destructive' });
+    if (isCorrect) {
+        try {
+            await runTransaction(db, async (transaction) => {
+                const gameDocRef = doc(db, 'rooms', roomId, 'game', 'gameState');
+                const playerDocRef = doc(db, 'rooms', roomId, 'players', user.uid);
+                const drawerDocRef = doc(db, 'rooms', roomId, 'players', game.currentDrawerId);
+
+                const gameDoc = await transaction.get(gameDocRef);
+                const playerDoc = await transaction.get(playerDocRef);
+
+                if (!gameDoc.exists() || !playerDoc.exists()) throw "Game or player not found";
+                if (gameDoc.data().correctGuessers?.includes(user.uid)) return; // Already guessed
+
+                const guesserPoints = 100; // Example points
+                const drawerPoints = 50;
+                
+                transaction.update(playerDocRef, { score: (playerDoc.data()?.score || 0) + guesserPoints });
+                transaction.update(drawerDocRef, { score: (playerDoc.data()?.score || 0) + drawerPoints });
+                transaction.update(gameDocRef, { correctGuessers: [...(gameDoc.data().correctGuessers || []), user.uid] });
+
+                const correctMsg = { 
+                    text: `${playerDoc.data()?.name} guessed the word!`, 
+                    type: 'correct' as const, 
+                    playerId: user.uid,
+                    playerName: playerDoc.data()?.name || 'Anonymous',
+                    timestamp: serverTimestamp()
+                };
+                transaction.set(doc(collection(db, 'rooms', roomId, 'messages')), correctMsg);
+            });
+            // After successful transaction, host triggers next turn
+            if (isHost) {
+                // Check if all players guessed
+                const gameDoc = await getDoc(doc(db, 'rooms', roomId, 'game', 'gameState'));
+                if (gameDoc.exists()) {
+                    const { correctGuessers } = gameDoc.data();
+                    const nonDrawerPlayers = players.filter(p => p.id !== game.currentDrawerId);
+                    if (correctGuessers.length >= nonDrawerPlayers.length) {
+                        await startNextTurn();
+                    }
+                }
+            }
+        } catch (error) {
+            console.error("Error processing correct guess: ", error);
+            toast({ title: 'Error processing guess', variant: 'destructive' });
+        }
+    } else {
+        // Just a regular guess
+        const newMsg = { 
+            text: guessText, 
+            type: 'guess' as const, 
+            playerId: user.uid,
+            playerName: players.find(p => p.id === user.uid)?.name || 'Anonymous',
+            timestamp: serverTimestamp()
+        };
+        try {
+            await addDoc(collection(db, 'rooms', roomId as string, 'messages'), newMsg);
+        } catch (error) {
+            console.error("Error sending message: ", error);
+            toast({ title: 'Error sending message', variant: 'destructive' });
+        }
     }
   };
 
@@ -136,7 +287,6 @@ export default function GameRoom() {
 
   const handleClearCanvas = async () => {
     if (!roomId) return;
-    // For simplicity, we send a "clear" command. A more robust implementation would delete documents.
     const clearPoint: DrawingPoint = {
         type: 'clear',
         timestamp: serverTimestamp()
@@ -161,19 +311,18 @@ export default function GameRoom() {
       </div>
     );
   }
-
-  const currentUserPlayer = players.find(p => p.id === user.uid);
+  
   const isDrawer = game.currentDrawerId === user.uid;
   const youGuessedIt = game.correctGuessers?.includes(user.uid);
-  const turnEndsAt = (game.turnEndsAt as any)?.toDate().getTime() || Date.now() + 90000;
+  const turnEndsAt = game.turnEndsAt ? (game.turnEndsAt as Timestamp).toMillis() : Date.now() + (TURN_DURATION * 1000);
 
   return (
     <main className="grid grid-cols-1 lg:grid-cols-[250px_1fr_300px] grid-rows-[auto_1fr_auto] gap-4 p-4 h-screen max-h-screen overflow-hidden">
       {game.status === 'ended' && <GameEndDialog players={players} onPlayAgain={() => router.push('/')} />}
       <header className="lg:col-span-3 flex flex-col md:flex-row gap-4 justify-between items-center">
         <h1 className="text-2xl font-bold text-primary">SketchVerse</h1>
-        <WordDisplay word={game.currentWord} isDrawer={isDrawer} />
-        <div className="text-lg font-bold">Round {game.round}/5</div>
+        <WordDisplay word={game.currentWord} isDrawer={isDrawer} youGuessedIt={youGuessedIt} />
+        <div className="text-lg font-bold">Round {game.round}/{TOTAL_ROUNDS}</div>
       </header>
 
       <aside className="hidden lg:flex flex-col gap-4 row-start-2">

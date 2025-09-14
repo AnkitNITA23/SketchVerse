@@ -6,7 +6,7 @@ export interface Player {
   score: number;
   avatar: string;
   isHost?: boolean;
-  joinedAt?: Date | FieldValue;
+  joinedAt?: Timestamp | FieldValue;
 }
 
 export interface Message {
@@ -24,7 +24,7 @@ export interface Game {
     currentDrawerId: string;
     round: number;
     turnEndsAt: Timestamp | FieldValue;
-    correctGuessers?: string[];
+    correctGuessers: string[];
 }
 
 export interface ToolSettings {
@@ -34,8 +34,8 @@ export interface ToolSettings {
 
 export interface DrawingPoint {
     type: 'start' | 'draw' | 'end' | 'clear';
-    coords: { x: number; y: number };
-    settings: ToolSettings;
+    coords?: { x: number; y: number };
+    settings?: ToolSettings;
     timestamp?: FieldValue;
 }
 

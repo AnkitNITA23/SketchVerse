@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Image from 'next/image';
-import { doc, onSnapshot, collection, query, getDocs, runTransaction, updateDoc, serverTimestamp, setDoc, Timestamp } from 'firebase/firestore';
+import { doc, onSnapshot, collection, query, getDocs, runTransaction, updateDoc, serverTimestamp, setDoc, Timestamp, getDoc } from 'firebase/firestore';
 import { auth, db } from '@/lib/firebase';
 import { onAuthStateChanged, signInAnonymously, User } from 'firebase/auth';
 
@@ -19,6 +19,7 @@ import { AVATARS, generateUsername } from '@/lib/avatars';
 import { MOCK_WORD_LIST } from '@/lib/mock-data';
 import { cn } from '@/lib/utils';
 
+const TURN_DURATION = 90; // 90 seconds
 
 export default function RoomLobby() {
   const { roomId } = useParams();
@@ -37,7 +38,7 @@ export default function RoomLobby() {
   const playersRef = collection(roomRef, 'players');
 
   const currentUserInRoom = players.find(p => p.id === user?.uid);
-  const isHost = players.find(p => p.isHost);
+  const isHost = players.find(p => p.isHost && p.id === user?.uid);
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
@@ -47,15 +48,24 @@ export default function RoomLobby() {
         try {
             await runTransaction(db, async (transaction) => {
                 const roomDoc = await transaction.get(roomRef);
-                const newPlayerName = generateUsername();
-                const newPlayerAvatar = AVATARS[Math.floor(Math.random() * AVATARS.length)];
+                const playerDocRef = doc(playersRef, firebaseUser.uid);
+                const playerDoc = await transaction.get(playerDocRef);
 
+                let newPlayerName = generateUsername();
+                let newPlayerAvatar = AVATARS[Math.floor(Math.random() * AVATARS.length)];
+
+                if (playerDoc.exists()) {
+                    const playerData = playerDoc.data() as Player;
+                    newPlayerName = playerData.name;
+                    newPlayerAvatar = playerData.avatar;
+                }
+                
                 setUsername(newPlayerName);
                 setSelectedAvatar(newPlayerAvatar);
 
                 if (!roomDoc.exists()) {
                     transaction.set(roomRef, { createdAt: serverTimestamp(), host: firebaseUser.uid });
-                    transaction.set(doc(playersRef, firebaseUser.uid), {
+                    transaction.set(playerDocRef, {
                         id: firebaseUser.uid,
                         name: newPlayerName,
                         avatar: newPlayerAvatar,
@@ -64,24 +74,19 @@ export default function RoomLobby() {
                         joinedAt: serverTimestamp(),
                     });
                 } else {
-                    const playerDoc = await transaction.get(doc(playersRef, firebaseUser.uid));
                     if (!playerDoc.exists()) {
                         const playersSnapshot = await getDocs(playersRef);
                         if (playersSnapshot.size >= 5) {
                             throw new Error('Room is full');
                         }
-                        transaction.set(doc(playersRef, firebaseUser.uid), {
+                        transaction.set(playerDocRef, {
                             id: firebaseUser.uid,
                             name: newPlayerName,
                             avatar: newPlayerAvatar,
                             score: 0,
-                            isHost: false,
+                            isHost: false, // Only first player is host
                             joinedAt: serverTimestamp(),
                         });
-                    } else {
-                        const playerData = playerDoc.data() as Player;
-                        setUsername(playerData.name);
-                        setSelectedAvatar(playerData.avatar);
                     }
                 }
             });
@@ -109,14 +114,9 @@ export default function RoomLobby() {
   useEffect(() => {
     if(!user) return;
     
-    const q = query(collection(db, 'rooms', roomId as string, 'players'));
+    const q = query(collection(db, 'rooms', roomId as string, 'players'), orderBy('joinedAt'));
     const unsubscribe = onSnapshot(q, (snapshot) => {
-      const playersList = snapshot.docs.map(doc => doc.data() as Player).map(p => ({
-          ...p,
-          // Convert Firestore Timestamps to JS Dates for sorting
-          joinedAt: (p.joinedAt as unknown as Timestamp)?.toDate()
-      }));
-      playersList.sort((a, b) => (a.joinedAt as any) - (b.joinedAt as any));
+      const playersList = snapshot.docs.map(doc => doc.data() as Player);
       setPlayers(playersList);
     });
 
@@ -162,7 +162,7 @@ export default function RoomLobby() {
   };
 
   const startGame = async () => {
-    if (!currentUserInRoom?.isHost) {
+    if (!isHost) {
         toast({ variant: "destructive", title: "Only the host can start the game."});
         return;
     }
@@ -176,21 +176,26 @@ export default function RoomLobby() {
     try {
         const gameDocRef = doc(db, 'rooms', roomId as string, 'game', 'gameState');
         
-        // Simple logic to pick first player as drawer
         const firstDrawer = players[0];
         const word = MOCK_WORD_LIST[Math.floor(Math.random() * MOCK_WORD_LIST.length)];
-        const turnDuration = 90; // 90 seconds
 
         await setDoc(gameDocRef, {
             status: 'playing',
             currentWord: word,
             currentDrawerId: firstDrawer.id,
             round: 1,
-            turnEndsAt: Timestamp.fromMillis(Date.now() + turnDuration * 1000),
+            turnEndsAt: Timestamp.fromMillis(Date.now() + TURN_DURATION * 1000),
             correctGuessers: []
         });
 
-        // Navigate all clients to the game page via listener
+        // Add a system message to start the game
+        await addDoc(collection(db, 'rooms', roomId as string, 'messages'), {
+            text: `${firstDrawer.name} is drawing first. Good luck!`,
+            type: 'system',
+            timestamp: serverTimestamp()
+        });
+
+
     } catch (error) {
         console.error("Error starting game: ", error);
         toast({ variant: "destructive", title: "Could not start game." });
@@ -289,15 +294,15 @@ export default function RoomLobby() {
                 className="w-full font-bold text-lg shadow-lg hover:scale-105 transition-transform" 
                 size="lg"
                 onClick={startGame}
-                disabled={isStarting || (currentUserInRoom && !currentUserInRoom.isHost) || players.length < 2 || players.length > 5}
+                disabled={isStarting || !isHost || players.length < 2 || players.length > 5}
             >
                 {isStarting ? <Loader2 className="mr-2 h-5 w-5 animate-spin" /> : <ChevronsRight className="mr-2 h-5 w-5" />}
-                {currentUserInRoom?.isHost ? 'Start Game!' : 'Waiting for Host'}
+                {isHost ? 'Start Game!' : 'Waiting for Host'}
             </Button>
              <p className="text-xs text-muted-foreground text-center">
-                { currentUserInRoom?.isHost
+                { isHost
                     ? (players.length < 2 ? "You need at least 2 players to start." : "Ready to go! Hit start when your crew is all here.")
-                    : `Waiting for ${isHost?.name || 'the host'} to start the game.`
+                    : `Waiting for ${players.find(p => p.isHost)?.name || 'the host'} to start the game.`
                 }
              </p>
         </CardFooter>
