@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Image from 'next/image';
-import { doc, onSnapshot, collection, query, getDocs, runTransaction, updateDoc } from 'firebase/firestore';
+import { doc, onSnapshot, collection, query, getDocs, runTransaction, updateDoc, serverTimestamp, setDoc, Timestamp } from 'firebase/firestore';
 import { auth, db } from '@/lib/firebase';
 import { onAuthStateChanged, signInAnonymously, User } from 'firebase/auth';
 
@@ -16,6 +16,7 @@ import { Badge } from '@/components/ui/badge';
 import { Loader2, UserPlus, LogIn, Crown, Copy, Users, ChevronsRight } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { AVATARS, generateUsername } from '@/lib/avatars';
+import { MOCK_WORD_LIST } from '@/lib/mock-data';
 import { cn } from '@/lib/utils';
 
 
@@ -53,15 +54,14 @@ export default function RoomLobby() {
                 setSelectedAvatar(newPlayerAvatar);
 
                 if (!roomDoc.exists()) {
-                    transaction.set(roomRef, { createdAt: new Date(), host: firebaseUser.uid });
+                    transaction.set(roomRef, { createdAt: serverTimestamp(), host: firebaseUser.uid });
                     transaction.set(doc(playersRef, firebaseUser.uid), {
                         id: firebaseUser.uid,
                         name: newPlayerName,
                         avatar: newPlayerAvatar,
                         score: 0,
-                        isDrawing: false,
                         isHost: true,
-                        joinedAt: new Date(),
+                        joinedAt: serverTimestamp(),
                     });
                 } else {
                     const playerDoc = await transaction.get(doc(playersRef, firebaseUser.uid));
@@ -75,9 +75,8 @@ export default function RoomLobby() {
                             name: newPlayerName,
                             avatar: newPlayerAvatar,
                             score: 0,
-                            isDrawing: false,
                             isHost: false,
-                            joinedAt: new Date(),
+                            joinedAt: serverTimestamp(),
                         });
                     } else {
                         const playerData = playerDoc.data() as Player;
@@ -112,13 +111,27 @@ export default function RoomLobby() {
     
     const q = query(collection(db, 'rooms', roomId as string, 'players'));
     const unsubscribe = onSnapshot(q, (snapshot) => {
-      const playersList = snapshot.docs.map(doc => doc.data() as Player);
+      const playersList = snapshot.docs.map(doc => doc.data() as Player).map(p => ({
+          ...p,
+          // Convert Firestore Timestamps to JS Dates for sorting
+          joinedAt: (p.joinedAt as unknown as Timestamp)?.toDate()
+      }));
       playersList.sort((a, b) => (a.joinedAt as any) - (b.joinedAt as any));
       setPlayers(playersList);
     });
 
-    return () => unsubscribe();
-  }, [user, roomId]);
+    // Also listen for game state to see if game started
+    const gameSub = onSnapshot(doc(db, 'rooms', roomId as string, 'game', 'gameState'), (docSnap) => {
+        if (docSnap.exists() && docSnap.data().status === 'playing') {
+            router.push(`/game/${roomId}`);
+        }
+    });
+
+    return () => {
+        unsubscribe();
+        gameSub();
+    }
+  }, [user, roomId, router]);
 
   const handleProfileUpdate = async () => {
     if (!user || !username.trim()) return;
@@ -160,10 +173,29 @@ export default function RoomLobby() {
     }
 
     setIsStarting(true);
-    // Here you would typically trigger a server action to set up the game state
-    console.log("Starting game...");
-    // For now, we'll just navigate to a placeholder game route
-    router.push(`/game/${roomId}`);
+    try {
+        const gameDocRef = doc(db, 'rooms', roomId as string, 'game', 'gameState');
+        
+        // Simple logic to pick first player as drawer
+        const firstDrawer = players[0];
+        const word = MOCK_WORD_LIST[Math.floor(Math.random() * MOCK_WORD_LIST.length)];
+        const turnDuration = 90; // 90 seconds
+
+        await setDoc(gameDocRef, {
+            status: 'playing',
+            currentWord: word,
+            currentDrawerId: firstDrawer.id,
+            round: 1,
+            turnEndsAt: Timestamp.fromMillis(Date.now() + turnDuration * 1000),
+            correctGuessers: []
+        });
+
+        // Navigate all clients to the game page via listener
+    } catch (error) {
+        console.error("Error starting game: ", error);
+        toast({ variant: "destructive", title: "Could not start game." });
+        setIsStarting(false);
+    }
   };
 
 
@@ -273,3 +305,5 @@ export default function RoomLobby() {
     </main>
   );
 }
+
+    

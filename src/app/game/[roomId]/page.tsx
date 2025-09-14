@@ -1,13 +1,13 @@
 'use client';
 
 import { useEffect, useState, useRef } from 'react';
-import { useParams } from 'next/navigation';
+import { useParams, useRouter } from 'next/navigation';
 import { useToast } from '@/hooks/use-toast';
 import { onAuthStateChanged, User } from 'firebase/auth';
 import { auth, db } from '@/lib/firebase';
-import { doc, onSnapshot } from 'firebase/firestore';
-import { Loader2, Palette, Users, MessageSquare } from 'lucide-react';
-import type { GameState, Player, Message, ToolSettings } from '@/lib/types';
+import { doc, onSnapshot, collection, addDoc, serverTimestamp, query, orderBy } from 'firebase/firestore';
+import { Loader2 } from 'lucide-react';
+import type { GameState, Player, Message, ToolSettings, DrawingPoint, Game } from '@/lib/types';
 import { getAiHintAction } from '@/app/actions';
 
 import { Scoreboard } from '@/components/game/scoreboard';
@@ -15,100 +15,144 @@ import { DrawingCanvas } from '@/components/game/drawing-canvas';
 import { ChatPanel } from '@/components/game/chat-panel';
 import { Toolbar } from '@/components/game/toolbar';
 import { WordDisplay } from '@/components/game/word-display';
-
-
-// This is a placeholder. In a real app, this would be managed on the server.
-const MOCK_GAME_STATE: GameState = {
-  players: [
-    { id: 'user-1', name: 'Van Gogh', score: 0, isDrawing: true, avatar: 'avatar-1.svg' },
-    { id: 'user-2', name: 'Monet', score: 0, isDrawing: false, avatar: 'avatar-2.svg' },
-  ],
-  messages: [
-      { id: '1', type: 'system', text: 'The game has started! Van Gogh is drawing.'}
-  ],
-  currentWord: 'Starry Night',
-  turnEndsAt: Date.now() + 90000, // 90 seconds from now
-};
-
+import { GameEndDialog } from '@/components/game/game-end-dialog';
 
 export default function GameRoom() {
   const { roomId } = useParams();
+  const router = useRouter();
   const { toast } = useToast();
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
-  const [gameState, setGameState] = useState<GameState>(MOCK_GAME_STATE);
+  const [game, setGame] = useState<Game | null>(null);
+  const [players, setPlayers] = useState<Player[]>([]);
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [drawingPoints, setDrawingPoints] = useState<DrawingPoint[]>([]);
+
   const [toolSettings, setToolSettings] = useState<ToolSettings>({
     color: '#FFFFFF',
     brushSize: 5,
   });
 
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  
   // Auth listener
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (firebaseUser) => {
       if (firebaseUser) {
         setUser(firebaseUser);
       } else {
-        // Handle user not being logged in - maybe redirect
         toast({ title: 'You need to be logged in!', variant: 'destructive' });
-        // router.push('/');
+        router.push('/');
       }
     });
     return unsubscribe;
-  }, [toast]);
+  }, [toast, router]);
 
-  // Game state listener
+  // Game and Players state listener
   useEffect(() => {
     if (!user || !roomId) return;
-    setLoading(true);
 
-    // In a real app, you'd listen to the actual game state from Firestore.
-    // For now, we're just using mock data.
-    const roomRef = doc(db, 'rooms', roomId as string);
-    const unsubscribe = onSnapshot(roomRef, (docSnap) => {
+    const gameDocRef = doc(db, 'rooms', roomId as string, 'game', 'gameState');
+    const playersColRef = collection(db, 'rooms', roomId as string, 'players');
+
+    const unsubGame = onSnapshot(gameDocRef, (docSnap) => {
         if(docSnap.exists()) {
-            // Here you would process the real game state from the document
-            // For now, we'll just set our mock state
-            setGameState(MOCK_GAME_STATE);
+            setGame(docSnap.data() as Game);
         } else {
-            toast({ title: 'Room not found!', variant: 'destructive' });
-            // router.push('/');
+            // Maybe game ended or hasn't started
+            // toast({ title: 'Game not found!', variant: 'destructive' });
+            // router.push(`/room/${roomId}`);
         }
         setLoading(false);
     });
+    
+    const unsubPlayers = onSnapshot(query(playersColRef, orderBy('joinedAt')), (snapshot) => {
+        const playersList = snapshot.docs.map(doc => doc.data() as Player);
+        setPlayers(playersList);
+    });
 
-    return () => unsubscribe();
-  }, [user, roomId, toast]);
+    return () => {
+        unsubGame();
+        unsubPlayers();
+    };
+  }, [user, roomId, router, toast]);
+
+  // Messages and Drawing listeners
+  useEffect(() => {
+    if (!roomId) return;
+    const messagesColRef = collection(db, 'rooms', roomId as string, 'messages');
+    const drawingColRef = collection(db, 'rooms', roomId as string, 'drawingPoints');
+    
+    const qMessages = query(messagesColRef, orderBy('timestamp'));
+    const qDrawing = query(drawingColRef, orderBy('timestamp'));
+
+    const unsubMessages = onSnapshot(qMessages, (snapshot) => {
+        const messageList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Message));
+        setMessages(messageList);
+    });
+    
+    const unsubDrawing = onSnapshot(qDrawing, (snapshot) => {
+        const points = snapshot.docs.map(doc => doc.data() as DrawingPoint);
+        setDrawingPoints(points);
+    });
+
+    return () => {
+        unsubMessages();
+        unsubDrawing();
+    }
+  }, [roomId]);
   
-  const handleSendMessage = (text: string) => {
-    // This will be implemented to send a message to Firestore
-    console.log('Sending message:', text);
-    const newMsg: Message = { id: Date.now().toString(), text, type: 'guess', playerName: 'You', playerId: user?.uid };
-    setGameState(prev => ({...prev, messages: [...prev.messages, newMsg]}));
-  };
+  const handleSendMessage = async (text: string) => {
+    if (!user || !roomId || !text.trim()) return;
 
-  const handleGetHint = async () => {
-    const drawingDescription = "A swirly night sky with a big moon and a village."; // This would come from the drawer or AI analysis of the canvas
-    const recentGuesses = gameState.messages.filter(m => m.type === 'guess').map(m => m.text);
+    const newMsg = { 
+        text: text.trim(), 
+        type: 'guess' as const, 
+        playerId: user.uid,
+        playerName: players.find(p => p.id === user.uid)?.name || 'Anonymous',
+        timestamp: serverTimestamp()
+    };
     
-    const hint = await getAiHintAction(drawingDescription, recentGuesses);
-    
-    const hintMsg: Message = { id: Date.now().toString(), text: hint, type: 'hint' };
-    setGameState(prev => ({...prev, messages: [...prev.messages, hintMsg]}));
-  };
-
-  const handleClearCanvas = () => {
-    const canvas = canvasRef.current;
-    if (canvas) {
-      const context = canvas.getContext('2d');
-      if (context) {
-        context.clearRect(0, 0, canvas.width, canvas.height);
-      }
+    try {
+        await addDoc(collection(db, 'rooms', roomId as string, 'messages'), newMsg);
+    } catch (error) {
+        console.error("Error sending message: ", error);
+        toast({ title: 'Error sending message', variant: 'destructive' });
     }
   };
 
-  if (loading) {
+  const handleGetHint = async () => {
+    if (!game) return;
+    const drawingDescription = "A player's drawing"; // In a more advanced version, this could come from canvas analysis
+    const recentGuesses = messages.filter(m => m.type === 'guess').map(m => m.text);
+    
+    const hint = await getAiHintAction(drawingDescription, recentGuesses);
+    
+    const hintMsg = { 
+        text: hint, 
+        type: 'hint' as const,
+        timestamp: serverTimestamp()
+    };
+    await addDoc(collection(db, 'rooms', roomId as string, 'messages'), hintMsg);
+  };
+
+  const handleClearCanvas = async () => {
+    if (!roomId) return;
+    // For simplicity, we send a "clear" command. A more robust implementation would delete documents.
+    const clearPoint: DrawingPoint = {
+        type: 'clear',
+        timestamp: serverTimestamp()
+    }
+    await addDoc(collection(db, 'rooms',roomId as string, 'drawingPoints'), clearPoint);
+  };
+  
+  const handleDraw = async (point: Omit<DrawingPoint, 'timestamp'>) => {
+    if (!roomId) return;
+    await addDoc(collection(db, 'rooms', roomId as string, 'drawingPoints'), {
+        ...point,
+        timestamp: serverTimestamp(),
+    });
+  }
+
+  if (loading || !game || !user) {
     return (
       <div className="flex flex-col items-center justify-center min-h-screen gap-4 text-center">
         <Loader2 className="w-16 h-16 animate-spin text-primary" />
@@ -118,32 +162,39 @@ export default function GameRoom() {
     );
   }
 
-  const currentUserPlayer = gameState.players.find(p => p.id === user?.uid) ?? gameState.players[0]; // Fallback for mock
-  const isDrawer = currentUserPlayer.isDrawing;
-  const youGuessedIt = false; // This would be part of the player's state
+  const currentUserPlayer = players.find(p => p.id === user.uid);
+  const isDrawer = game.currentDrawerId === user.uid;
+  const youGuessedIt = game.correctGuessers?.includes(user.uid);
+  const turnEndsAt = (game.turnEndsAt as any)?.toDate().getTime() || Date.now() + 90000;
 
   return (
     <main className="grid grid-cols-1 lg:grid-cols-[250px_1fr_300px] grid-rows-[auto_1fr_auto] gap-4 p-4 h-screen max-h-screen overflow-hidden">
+      {game.status === 'ended' && <GameEndDialog players={players} onPlayAgain={() => router.push('/')} />}
       <header className="lg:col-span-3 flex flex-col md:flex-row gap-4 justify-between items-center">
         <h1 className="text-2xl font-bold text-primary">SketchVerse</h1>
-        <WordDisplay word={gameState.currentWord} isDrawer={isDrawer} />
-        <div className="text-lg font-bold">Round 1/5</div>
+        <WordDisplay word={game.currentWord} isDrawer={isDrawer} />
+        <div className="text-lg font-bold">Round {game.round}/5</div>
       </header>
 
       <aside className="hidden lg:flex flex-col gap-4 row-start-2">
-        <Scoreboard players={gameState.players} />
+        <Scoreboard players={players} currentDrawerId={game.currentDrawerId} />
       </aside>
 
       <div className="relative row-start-2 lg:col-start-2 bg-card rounded-lg border flex items-center justify-center">
-        <DrawingCanvas ref={canvasRef} toolSettings={toolSettings} isDrawer={isDrawer} />
+        <DrawingCanvas 
+            toolSettings={toolSettings} 
+            isDrawer={isDrawer} 
+            initialPoints={drawingPoints}
+            onDraw={handleDraw}
+        />
       </div>
 
       <aside className="flex flex-col gap-4 row-start-3 lg:row-start-2 lg:col-start-3">
         <ChatPanel
-          messages={gameState.messages}
-          turnEndsAt={gameState.turnEndsAt}
+          messages={messages}
+          turnEndsAt={turnEndsAt}
           isDrawer={isDrawer}
-          isGuessed={youGuessedIt}
+          isGuessed={youGuessedIt || false}
           onSendMessage={handleSendMessage}
           onGetHint={handleGetHint}
         />
@@ -163,3 +214,5 @@ export default function GameRoom() {
     </main>
   );
 }
+
+    

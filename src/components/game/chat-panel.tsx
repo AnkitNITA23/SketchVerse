@@ -2,13 +2,13 @@
 
 import type { FC } from 'react';
 import React, { useState, useEffect, useRef } from 'react';
-import { Lightbulb, Send, MessageSquareText, BrainCircuit, Bot } from 'lucide-react';
+import { Lightbulb, Send, MessageSquareText, BrainCircuit, PartyPopper } from 'lucide-react';
 import { Card, CardContent, CardFooter, CardHeader } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Progress } from '@/components/ui/progress';
-import { Avatar, AvatarFallback } from '@/components/ui/avatar';
+import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import type { Message } from '@/lib/types';
 import { cn } from '@/lib/utils';
 
@@ -41,6 +41,8 @@ const Timer: FC<{ turnEndsAt: number }> = ({ turnEndsAt }) => {
   }, [turnEndsAt]);
   
   const progress = (timeLeft / totalDuration) * 100;
+  
+  const progressColor = progress > 50 ? "bg-green-500" : progress > 20 ? "bg-yellow-500" : "bg-red-500";
 
   return (
     <div className="w-full">
@@ -48,7 +50,7 @@ const Timer: FC<{ turnEndsAt: number }> = ({ turnEndsAt }) => {
         <span className="text-sm text-muted-foreground">Time Left</span>
         <span className="text-sm font-mono font-semibold">{timeLeft}s</span>
       </div>
-      <Progress value={progress} className="h-2" />
+      <Progress value={progress} className="h-2 [&>div]:bg-primary" />
     </div>
   );
 };
@@ -58,9 +60,15 @@ export const ChatPanel: FC<ChatPanelProps> = ({ messages, turnEndsAt, isDrawer, 
   const scrollAreaRef = useRef<HTMLDivElement>(null);
   
   useEffect(() => {
-    if (scrollAreaRef.current) {
-      scrollAreaRef.current.scrollTo({ top: scrollAreaRef.current.scrollHeight, behavior: 'smooth' });
-    }
+    // A slight delay to allow the DOM to update before scrolling
+    setTimeout(() => {
+        if (scrollAreaRef.current) {
+          const scrollableNode = scrollAreaRef.current.children[0].children[0] as HTMLElement;
+          if(scrollableNode) {
+            scrollableNode.scrollTo({ top: scrollableNode.scrollHeight, behavior: 'smooth' });
+          }
+        }
+    }, 100);
   }, [messages]);
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -78,25 +86,28 @@ export const ChatPanel: FC<ChatPanelProps> = ({ messages, turnEndsAt, isDrawer, 
       </CardHeader>
       <CardContent className="flex-1 overflow-hidden p-0">
         <ScrollArea className="h-full" ref={scrollAreaRef}>
-          <div className="p-6 space-y-4">
+          <div className="p-4 space-y-4">
             {messages.map((msg) => (
               <div
                 key={msg.id}
                 className={cn(
                   'flex items-start gap-3 text-sm',
-                  msg.type === 'system' && 'justify-center',
-                  msg.type === 'hint' && 'justify-center'
+                  (msg.type === 'system' || msg.type === 'hint') && 'justify-center',
+                  msg.type === 'correct' && 'p-2 bg-yellow-500/10 border border-yellow-500/20 rounded-lg'
                 )}
               >
-                {msg.type === 'guess' && (
+                {(msg.type === 'guess' || msg.type === 'correct') && (
                   <>
                     <Avatar className="w-8 h-8 border">
                       <AvatarFallback className="text-xs">{msg.playerName?.substring(0, 2)}</AvatarFallback>
                     </Avatar>
                     <div className="flex-1">
                       <p className="font-semibold">{msg.playerName}</p>
-                      <p className="text-muted-foreground">{msg.text}</p>
+                      <p className={cn("text-muted-foreground", msg.type === 'correct' && "text-yellow-400 font-bold")}>
+                        {msg.type === 'correct' ? `${msg.playerName} guessed the word!` : msg.text}
+                      </p>
                     </div>
+                     {msg.type === 'correct' && <PartyPopper className="w-5 h-5 text-yellow-400" />}
                   </>
                 )}
                 {msg.type === 'system' && (
@@ -118,7 +129,7 @@ export const ChatPanel: FC<ChatPanelProps> = ({ messages, turnEndsAt, isDrawer, 
       </CardContent>
       <CardFooter className="p-4 flex-col gap-2">
          {!isDrawer && (
-             <Button variant="outline" size="sm" className="w-full" onClick={onGetHint}>
+             <Button variant="outline" size="sm" className="w-full" onClick={onGetHint} disabled={isGuessed}>
                 <Lightbulb className="mr-2 h-4 w-4" />
                 Get a Hint from AI
              </Button>
@@ -140,3 +151,5 @@ export const ChatPanel: FC<ChatPanelProps> = ({ messages, turnEndsAt, isDrawer, 
     </Card>
   );
 };
+
+    

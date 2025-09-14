@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Slider } from '@/components/ui/slider';
 import { cn } from '@/lib/utils';
+import { useMemo } from 'react';
 
 interface ToolbarProps {
   toolSettings: ToolSettings;
@@ -15,10 +16,21 @@ interface ToolbarProps {
 }
 
 const COLORS = ['#FFFFFF', '#EF4444', '#F97316', '#EAB308', '#22C55E', '#3B82F6', '#A855F7', '#EC4899', '#64748B', '#000000'];
-const ERASER_COLOR = '#2B2B2B'; // Matching card bg
 
 export const Toolbar: FC<ToolbarProps> = ({ toolSettings, onSettingsChange, onClear }) => {
-  const isEraser = toolSettings.color === ERASER_COLOR;
+  
+  const eraserColor = useMemo(() => {
+    // This is a trick to get the background color of the canvas
+    // In a real app, this should be handled more elegantly e.g. via CSS variables
+    if (typeof window !== 'undefined') {
+        const style = window.getComputedStyle(document.body);
+        const cardColor = style.getPropertyValue('--card');
+        if (cardColor) return `hsl(${cardColor.trim()})`;
+    }
+    return 'hsl(222 84% 4.9%)'; // Fallback to the default dark card color
+  }, []);
+
+  const isEraser = toolSettings.color === eraserColor;
 
   const handleColorChange = (color: string) => {
     onSettingsChange({ ...toolSettings, color });
@@ -29,11 +41,7 @@ export const Toolbar: FC<ToolbarProps> = ({ toolSettings, onSettingsChange, onCl
   };
 
   const handleEraser = () => {
-    onSettingsChange({ ...toolSettings, color: ERASER_COLOR });
-  };
-
-  const handlePen = () => {
-    onSettingsChange({ ...toolSettings, color: COLORS[0] });
+    onSettingsChange({ ...toolSettings, color: eraserColor });
   };
   
   return (
@@ -69,19 +77,12 @@ export const Toolbar: FC<ToolbarProps> = ({ toolSettings, onSettingsChange, onCl
               onValueChange={handleBrushSizeChange}
               max={50}
               step={1}
+              min={1}
             />
           </div>
         </PopoverContent>
       </Popover>
 
-      <Button 
-        variant="outline" 
-        size="icon" 
-        className={cn("h-9 w-9", !isEraser && toolSettings.color !== COLORS[0] && 'bg-primary/10')} 
-        onClick={handlePen}
-      >
-        <Paintbrush className="w-5 h-5" />
-      </Button>
       <Button 
         variant="outline" 
         size="icon" 
@@ -96,3 +97,5 @@ export const Toolbar: FC<ToolbarProps> = ({ toolSettings, onSettingsChange, onCl
     </div>
   );
 };
+
+    

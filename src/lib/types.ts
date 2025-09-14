@@ -1,11 +1,12 @@
+import { FieldValue, Timestamp } from "firebase/firestore";
+
 export interface Player {
   id: string;
   name: string;
   score: number;
-  isDrawing: boolean;
   avatar: string;
   isHost?: boolean;
-  joinedAt?: Date;
+  joinedAt?: Date | FieldValue;
 }
 
 export interface Message {
@@ -13,9 +14,32 @@ export interface Message {
   playerId?: string;
   playerName?: string;
   text: string;
-  type: 'guess' | 'system' | 'hint';
+  type: 'guess' | 'system' | 'hint' | 'correct';
+  timestamp?: FieldValue;
 }
 
+export interface Game {
+    status: 'playing' | 'ended' | 'waiting';
+    currentWord: string;
+    currentDrawerId: string;
+    round: number;
+    turnEndsAt: Timestamp | FieldValue;
+    correctGuessers?: string[];
+}
+
+export interface ToolSettings {
+  color: string;
+  brushSize: number;
+}
+
+export interface DrawingPoint {
+    type: 'start' | 'draw' | 'end' | 'clear';
+    coords: { x: number; y: number };
+    settings: ToolSettings;
+    timestamp?: FieldValue;
+}
+
+// Deprecated, use Game instead
 export interface GameState {
   players: Player[];
   messages: Message[];
@@ -23,7 +47,4 @@ export interface GameState {
   turnEndsAt: number;
 }
 
-export interface ToolSettings {
-  color: string;
-  brushSize: number;
-}
+    
