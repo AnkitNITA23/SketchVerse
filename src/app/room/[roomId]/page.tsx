@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Image from 'next/image';
-import { doc, onSnapshot, collection, query, getDocs, runTransaction, updateDoc, serverTimestamp, setDoc, Timestamp, getDoc, addDoc } from 'firebase/firestore';
+import { doc, onSnapshot, collection, query, getDocs, runTransaction, updateDoc, serverTimestamp, setDoc, Timestamp, getDoc, addDoc, orderBy } from 'firebase/firestore';
 import { auth, db } from '@/lib/firebase';
 import { onAuthStateChanged, signInAnonymously, User } from 'firebase/auth';
 
@@ -312,5 +312,3 @@ export default function RoomLobby() {
     </main>
   );
 }
-
-    
