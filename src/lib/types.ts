@@ -4,6 +4,8 @@ export interface Player {
   score: number;
   isDrawing: boolean;
   avatar: string;
+  isHost?: boolean;
+  joinedAt?: Date;
 }
 
 export interface Message {
