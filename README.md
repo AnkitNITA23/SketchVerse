@@ -1,5 +1,3 @@
-# Firebase Studio
+# SketchVerse
 
-This is a NextJS starter in Firebase Studio.
-
-To get started, take a look at src/app/page.tsx.
+A real-time multiplayer drawing and guessing game built with Next.js and Firebase Studio.
