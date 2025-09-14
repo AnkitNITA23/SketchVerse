@@ -188,7 +188,7 @@ export default function RoomLobby() {
             </div>
             <div className="flex items-center gap-2">
               <Badge variant="secondary" className="text-lg font-mono tracking-widest">{roomId}</Badge>
-              <Button size="icon" variant="outline" onClick={copyRoomId}>
+              <Button size="icon" variant="outline" onClick={copyRoomId} className="hover:bg-primary/10 hover:text-primary">
                 <Copy className="w-4 h-4" />
               </Button>
             </div>
@@ -213,7 +213,7 @@ export default function RoomLobby() {
                     <h3 className="font-semibold text-center">Customize Your Look</h3>
                     <div className="flex justify-center gap-2 flex-wrap">
                         {AVATARS.map(avatar => (
-                            <button key={avatar} onClick={() => setSelectedAvatar(avatar)} className={cn("rounded-full transition-all hover:scale-110", selectedAvatar === avatar ? 'ring-2 ring-primary ring-offset-2 ring-offset-background' : '')}>
+                            <button key={avatar} onClick={() => setSelectedAvatar(avatar)} className={cn("rounded-full transition-all hover:scale-110 hover:shadow-lg hover:shadow-primary/30", selectedAvatar === avatar ? 'ring-2 ring-primary ring-offset-2 ring-offset-background' : '')}>
                                 <Avatar className="h-16 w-16 border-2 border-muted">
                                     <AvatarImage src={`/avatars/${avatar}`} />
                                     <AvatarFallback>AV</AvatarFallback>
@@ -232,13 +232,13 @@ export default function RoomLobby() {
                 <h3 className="font-semibold mb-4 flex items-center gap-2"><Users className="w-5 h-5"/> Players ({players.length}/5)</h3>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     {players.map(player => (
-                    <div key={player.id} className="flex items-center gap-3 p-2 bg-background/50 rounded-md border">
+                    <div key={player.id} className="flex items-center gap-3 p-2 bg-background/50 rounded-md border transition-colors hover:border-secondary">
                         <Avatar className="h-10 w-10 border-2 border-secondary">
                           <AvatarImage src={`/avatars/${player.avatar}`} alt={player.name} />
                           <AvatarFallback>{player.name.substring(0, 2)}</AvatarFallback>
                         </Avatar>
                         <span className="font-medium flex-1 truncate">{player.name} {player.id === user?.uid && '(You)'}</span>
-                        {player.isHost && <Crown className="w-5 h-5 text-yellow-500" title="Host"/>}
+                        {player.isHost && <Crown className="w-5 h-5 text-yellow-500 hover:animate-wiggle" title="Host"/>}
                     </div>
                     ))}
                     {[...Array(5 - players.length)].map((_, i) => (

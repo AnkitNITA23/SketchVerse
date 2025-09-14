@@ -105,3 +105,8 @@
     opacity: 0.5;
     transform-origin: bottom center;
 }
+
+@keyframes wiggle {
+    0%, 100% { transform: rotate(-3deg); }
+    50% { transform: rotate(3deg); }
+}

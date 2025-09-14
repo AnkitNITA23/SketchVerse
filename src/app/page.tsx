@@ -46,7 +46,7 @@ export default function HomePage() {
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-8 w-full max-w-4xl z-10">
-        <Card className="flex flex-col bg-card/80 backdrop-blur-sm border-primary/20 animate-bounce-in" style={{animationDelay: '0.2s'}}>
+        <Card className="flex flex-col bg-card/80 backdrop-blur-sm border-primary/20 animate-bounce-in transition-all duration-300 hover:border-primary/40 hover:shadow-2xl hover:shadow-primary/20 hover:-translate-y-2" style={{animationDelay: '0.2s'}}>
           <CardHeader className="text-center">
             <div className="mx-auto bg-primary/10 p-4 rounded-full w-fit mb-4 border-2 border-primary/30">
                 <Wand2 className="h-8 w-8 text-primary" />
@@ -59,14 +59,14 @@ export default function HomePage() {
               size="lg"
               onClick={handleCreateRoom}
               disabled={isCreating || isJoining}
-              className="font-bold text-lg shadow-lg shadow-primary/20 hover:scale-105 transition-transform"
+              className="font-bold text-lg shadow-lg shadow-primary/20 hover:scale-105 transition-transform hover:shadow-xl hover:shadow-primary/30"
             >
               {isCreating ? 'Summoning a Room...' : 'Create Room'}
             </Button>
           </CardContent>
         </Card>
 
-        <Card className="flex flex-col bg-card/80 backdrop-blur-sm border-secondary/20 animate-bounce-in" style={{animationDelay: '0.4s'}}>
+        <Card className="flex flex-col bg-card/80 backdrop-blur-sm border-secondary/20 animate-bounce-in transition-all duration-300 hover:border-secondary/40 hover:shadow-2xl hover:shadow-secondary/20 hover:-translate-y-2" style={{animationDelay: '0.4s'}}>
           <CardHeader className="text-center">
             <div className="mx-auto bg-secondary/10 p-4 rounded-full w-fit mb-4 border-2 border-secondary/30">
                 <Users className="h-8 w-8 text-secondary" />
@@ -84,7 +84,7 @@ export default function HomePage() {
                 className="text-center text-xl tracking-widest font-black"
                 maxLength={6}
               />
-              <Button variant="secondary" type="submit" size="lg" disabled={isCreating || isJoining || !roomCode.trim()} className="font-bold text-lg shadow-lg shadow-secondary/20 hover:scale-105 transition-transform">
+              <Button variant="secondary" type="submit" size="lg" disabled={isCreating || isJoining || !roomCode.trim()} className="font-bold text-lg shadow-lg shadow-secondary/20 hover:scale-105 transition-transform hover:shadow-xl hover:shadow-secondary/30">
                 {isJoining ? 'Crashing the Party...' : 'Join Room'}
               </Button>
             </form>
