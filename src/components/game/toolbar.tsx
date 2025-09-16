@@ -1,3 +1,4 @@
+
 'use client';
 
 import type { FC } from 'react';
@@ -9,14 +10,8 @@ import { Slider } from '@/components/ui/slider';
 import { cn } from '@/lib/utils';
 import { useMemo } from 'react';
 
-interface ToolbarProps {
-  toolSettings: ToolSettings;
-  onSettingsChange: (settings: ToolSettings) => void;
-  onClear: () => void;
-}
-
 const COLORS = ['#FFFFFF', '#EF4444', '#F97316', '#EAB308', '#22C55E', '#3B82F6', '#A855F7', '#EC4899', '#64748B', '#000000'];
-const ERASER_COLOR = 'hsl(222 84% 4.9%)'; // This should match the --card HSL value in globals.css for dark mode
+export const ERASER_COLOR = 'hsl(222 84% 4.9%)';
 
 export const Toolbar: FC<ToolbarProps> = ({ toolSettings, onSettingsChange, onClear }) => {
   
@@ -35,7 +30,7 @@ export const Toolbar: FC<ToolbarProps> = ({ toolSettings, onSettingsChange, onCl
   };
   
   return (
-    <div className="flex items-center justify-center gap-2 p-2 rounded-lg bg-card border">
+    <div className="flex items-center justify-center gap-1 md:gap-2 p-2 rounded-lg bg-card border flex-wrap">
       <div className="flex items-center gap-1">
         {COLORS.map((color) => (
           <Button
@@ -43,8 +38,8 @@ export const Toolbar: FC<ToolbarProps> = ({ toolSettings, onSettingsChange, onCl
             variant="outline"
             size="icon"
             className={cn(
-              'h-8 w-8 rounded-full border-2',
-              toolSettings.color === color && !isEraser && 'border-primary ring-2 ring-primary'
+              'h-8 w-8 rounded-full border-2 transition-transform hover:scale-110',
+              toolSettings.color === color && !isEraser && 'border-primary ring-2 ring-primary scale-110'
             )}
             style={{ backgroundColor: color }}
             onClick={() => handleColorChange(color)}
@@ -52,6 +47,8 @@ export const Toolbar: FC<ToolbarProps> = ({ toolSettings, onSettingsChange, onCl
           />
         ))}
       </div>
+
+      <div className="h-6 w-px bg-border mx-1"></div>
 
       <Popover>
         <PopoverTrigger asChild>
@@ -76,7 +73,7 @@ export const Toolbar: FC<ToolbarProps> = ({ toolSettings, onSettingsChange, onCl
       <Button 
         variant="outline" 
         size="icon" 
-        className={cn("h-9 w-9", isEraser && 'bg-primary/10')} 
+        className={cn("h-9 w-9", isEraser && 'bg-primary/20 text-primary ring-2 ring-primary')} 
         onClick={handleEraser}
       >
         <Eraser className="w-5 h-5" />
@@ -87,3 +84,5 @@ export const Toolbar: FC<ToolbarProps> = ({ toolSettings, onSettingsChange, onCl
     </div>
   );
 };
+
+    

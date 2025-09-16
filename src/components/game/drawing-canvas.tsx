@@ -1,9 +1,11 @@
+
 'use client';
 
 import type { FC } from 'react';
 import React, { useRef, useEffect, useState, forwardRef } from 'react';
 import type { ToolSettings, DrawingPoint } from '@/lib/types';
 import { cn } from '@/lib/utils';
+import { ERASER_COLOR } from './toolbar';
 
 interface DrawingCanvasProps {
   toolSettings: ToolSettings;
@@ -13,8 +15,7 @@ interface DrawingCanvasProps {
   gameStatus: 'playing' | 'ended' | 'waiting';
 }
 
-// Throttle drawing events to avoid overwhelming Firestore
-const THROTTLE_MS = 100;
+const THROTTLE_MS = 50; // Send updates more frequently for smoother drawing
 
 export const DrawingCanvas = forwardRef<HTMLCanvasElement, DrawingCanvasProps>(({ toolSettings, isDrawer, initialPoints, onDraw, gameStatus }, ref) => {
   const internalRef = useRef<HTMLCanvasElement>(null);
@@ -32,41 +33,71 @@ export const DrawingCanvas = forwardRef<HTMLCanvasElement, DrawingCanvasProps>((
     }
   };
 
-  const redraw = (points: DrawingPoint[]) => {
+  const redraw = () => {
     const canvas = canvasRef.current;
-    const context = contextRef.current;
-    if (!canvas || !context) return;
+    if (!canvas) return;
+    const context = canvas.getContext('2d');
+    if (!context) return;
     
     context.clearRect(0, 0, canvas.width, canvas.height);
-    if (points.length === 0) return;
 
     let lastPoint: DrawingPoint | null = null;
-    for (const point of points) {
-        if (!point.coords || !point.settings) continue;
+    let currentPathPoints: DrawingPoint[] = [];
 
-        context.strokeStyle = point.settings.color;
-        context.lineWidth = point.settings.brushSize;
-        context.lineCap = 'round';
-        context.lineJoin = 'round';
-        
-        // Use globalCompositeOperation for the eraser
-        context.globalCompositeOperation = point.settings.color === 'hsl(222 84% 4.9%)' ? 'destination-out' : 'source-over';
-        
-        if (point.type === 'start') {
-            context.beginPath();
-            context.moveTo(point.coords.x * canvas.width, point.coords.y * canvas.height);
-        } else if (point.type === 'draw' && lastPoint?.type !== 'end') {
-            context.lineTo(point.coords.x * canvas.width, point.coords.y * canvas.height);
-            context.stroke();
-        } else if (point.type === 'end') {
-            context.closePath();
+    const strokePath = (pathPoints: DrawingPoint[]) => {
+      if (pathPoints.length < 2 || !pathPoints[0].settings) return;
+      
+      const firstPoint = pathPoints[0];
+      const scaledBrushSize = firstPoint.settings.brushSize * (canvas.width / 1000); // Scale brush size
+      
+      context.strokeStyle = firstPoint.settings.color;
+      context.lineWidth = scaledBrushSize;
+      context.lineCap = 'round';
+      context.lineJoin = 'round';
+      context.globalCompositeOperation = firstPoint.settings.color === ERASER_COLOR ? 'destination-out' : 'source-over';
+      
+      context.beginPath();
+      context.moveTo(firstPoint.coords!.x * canvas.width, firstPoint.coords!.y * canvas.height);
+
+      for (let i = 1; i < pathPoints.length; i++) {
+        const point = pathPoints[i];
+        context.lineTo(point.coords!.x * canvas.width, point.coords!.y * canvas.height);
+      }
+      context.stroke();
+    };
+
+    initialPoints.forEach(point => {
+      if (point.type === 'clear') {
+        context.clearRect(0, 0, canvas.width, canvas.height);
+        currentPathPoints = [];
+        return;
+      }
+
+      if (!point.coords || !point.settings) return;
+
+      if (point.type === 'start') {
+        if (currentPathPoints.length > 0) {
+          strokePath(currentPathPoints);
         }
-        lastPoint = point;
+        currentPathPoints = [point];
+      } else if (point.type === 'draw') {
+        currentPathPoints.push(point);
+      } else if (point.type === 'end') {
+        currentPathPoints.push(point);
+        strokePath(currentPathPoints);
+        currentPathPoints = [];
+      }
+      lastPoint = point;
+    });
+
+    if (currentPathPoints.length > 0) {
+      strokePath(currentPathPoints);
     }
-    // Set composite operation back to default
+    
+    // Reset composite operation
     context.globalCompositeOperation = 'source-over';
   };
-
+  
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -80,16 +111,16 @@ export const DrawingCanvas = forwardRef<HTMLCanvasElement, DrawingCanvasProps>((
             canvas.width = width;
             canvas.height = height;
             contextRef.current = canvas.getContext('2d');
-            redraw(initialPoints);
+            redraw();
         }
     });
     resizeObserver.observe(parent);
     return () => resizeObserver.disconnect();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-
+  
   useEffect(() => {
-    redraw(initialPoints);
+    redraw();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialPoints]);
 
@@ -100,8 +131,6 @@ export const DrawingCanvas = forwardRef<HTMLCanvasElement, DrawingCanvasProps>((
     const event = e instanceof MouseEvent ? e : e.touches[0];
     if(!event) return null;
     
-    // Normalize coordinates to be between 0 and 1
-    // This makes them independent of the canvas size and aspect ratio
     return { 
         x: (event.clientX - rect.left) / canvas.width, 
         y: (event.clientY - rect.top) / canvas.height
@@ -118,28 +147,43 @@ export const DrawingCanvas = forwardRef<HTMLCanvasElement, DrawingCanvasProps>((
   }
 
   const startDrawing = (e: React.MouseEvent<HTMLCanvasElement> | React.TouchEvent<HTMLCanvasElement>) => {
-    if (!isDrawer) return;
+    if (!isDrawer || gameStatus !== 'playing') return;
     e.preventDefault();
     const coords = getCoords(e.nativeEvent);
     if (!coords) return;
-
+    
     setIsDrawing(true);
+
+    const context = contextRef.current;
+    const canvas = canvasRef.current;
+    if (context && canvas) {
+        const scaledBrushSize = toolSettings.brushSize * (canvas.width / 1000);
+        context.lineWidth = scaledBrushSize;
+        context.strokeStyle = toolSettings.color;
+        context.globalCompositeOperation = toolSettings.color === ERASER_COLOR ? 'destination-out' : 'source-over';
+        context.lineCap = 'round';
+        context.lineJoin = 'round';
+        context.beginPath();
+        context.moveTo(coords.x * canvas.width, coords.y * canvas.height);
+    }
+    
     const point: Omit<DrawingPoint, 'timestamp'> = { type: 'start', coords, settings: toolSettings };
-    onDraw(point); // Send start immediately
-    redraw([...initialPoints, point]);
+    onDraw(point);
   };
 
   const finishDrawing = (e: React.MouseEvent<HTMLCanvasElement> | React.TouchEvent<HTMLCanvasElement>) => {
     if (!isDrawer || !isDrawing) return;
     e.preventDefault();
-    const coords = getCoords(e.nativeEvent);
-    if (!coords) return;
     
-    sendBatchedPoints(); // Send any remaining points
-    const point: Omit<DrawingPoint, 'timestamp'> = { type: 'end', coords, settings: toolSettings };
-    onDraw(point);
+    sendBatchedPoints();
+    const coords = getCoords(e.nativeEvent);
+    if (coords) {
+        const point: Omit<DrawingPoint, 'timestamp'> = { type: 'end', coords, settings: toolSettings };
+        onDraw(point);
+    }
+    
     setIsDrawing(false);
-    redraw([...initialPoints, ...batchedPoints.current, point]);
+    contextRef.current?.closePath();
     batchedPoints.current = [];
   };
 
@@ -149,21 +193,16 @@ export const DrawingCanvas = forwardRef<HTMLCanvasElement, DrawingCanvasProps>((
     const coords = getCoords(e.nativeEvent);
     if (!coords) return;
 
-    const point: Omit<DrawingPoint, 'timestamp'> = { type: 'draw', coords, settings: toolSettings };
-    addPointToBatch(point);
-    
     // Draw locally for immediate feedback
     const context = contextRef.current;
     const canvas = canvasRef.current;
     if (context && canvas) {
-        context.strokeStyle = toolSettings.color;
-        context.lineWidth = toolSettings.brushSize;
-        context.lineCap = 'round';
-        context.lineJoin = 'round';
-        context.globalCompositeOperation = toolSettings.color === 'hsl(222 84% 4.9%)' ? 'destination-out' : 'source-over';
         context.lineTo(coords.x * canvas.width, coords.y * canvas.height);
         context.stroke();
     }
+    
+    const point: Omit<DrawingPoint, 'timestamp'> = { type: 'draw', coords, settings: toolSettings };
+    addPointToBatch(point);
   };
   
   return (
@@ -177,11 +216,13 @@ export const DrawingCanvas = forwardRef<HTMLCanvasElement, DrawingCanvasProps>((
             onTouchStart={startDrawing}
             onTouchEnd={finishDrawing}
             onTouchMove={draw}
-            className={cn("absolute top-0 left-0 w-full h-full bg-card rounded-lg border", isDrawer ? "cursor-crosshair" : "cursor-not-allowed")}
+            className={cn("absolute top-0 left-0 w-full h-full bg-transparent", isDrawer ? "cursor-crosshair" : "cursor-not-allowed")}
         />
-        {gameStatus !== 'playing' && !isDrawer && (
+        {gameStatus !== 'playing' && (
              <div className="absolute inset-0 flex items-center justify-center bg-card/80 backdrop-blur-sm rounded-lg pointer-events-none">
-                <p className="text-muted-foreground font-medium">Waiting for the game to start...</p>
+                <p className="text-muted-foreground font-medium text-lg animate-pulse">
+                    {gameStatus === 'ended' ? 'Game has ended!' : 'Waiting for the next round...'}
+                </p>
             </div>
         )}
     </>
@@ -189,3 +230,5 @@ export const DrawingCanvas = forwardRef<HTMLCanvasElement, DrawingCanvasProps>((
 });
 
 DrawingCanvas.displayName = 'DrawingCanvas';
+
+    

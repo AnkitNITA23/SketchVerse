@@ -1,3 +1,4 @@
+
 'use client';
 
 import { useEffect, useState, useRef, useCallback } from 'react';
@@ -6,7 +7,7 @@ import { useToast } from '@/hooks/use-toast';
 import { onAuthStateChanged, User } from 'firebase/auth';
 import { auth, db } from '@/lib/firebase';
 import { doc, onSnapshot, collection, addDoc, serverTimestamp, query, orderBy, runTransaction, Timestamp, writeBatch, getDocs, getDoc } from 'firebase/firestore';
-import { Loader2 } from 'lucide-react';
+import { ChevronsLeft, ChevronsRight, Loader2 } from 'lucide-react';
 import type { Game, Player, Message, ToolSettings, DrawingPoint } from '@/lib/types';
 import { getAiHintAction } from '@/app/actions';
 import { MOCK_WORD_LIST } from '@/lib/mock-data';
@@ -17,6 +18,9 @@ import { ChatPanel } from '@/components/game/chat-panel';
 import { Toolbar } from '@/components/game/toolbar';
 import { WordDisplay } from '@/components/game/word-display';
 import { GameEndDialog } from '@/components/game/game-end-dialog';
+import { Button } from '@/components/ui/button';
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
+import { cn } from '@/lib/utils';
 
 const TURN_DURATION = 90; // 90 seconds
 const TOTAL_ROUNDS = 5;
@@ -31,6 +35,7 @@ export default function GameRoom() {
   const [players, setPlayers] = useState<Player[]>([]);
   const [messages, setMessages] = useState<Message[]>([]);
   const [drawingPoints, setDrawingPoints] = useState<DrawingPoint[]>([]);
+  const [isScoreboardOpen, setIsScoreboardOpen] = useState(false);
 
   const [toolSettings, setToolSettings] = useState<ToolSettings>({
     color: '#FFFFFF',
@@ -92,8 +97,6 @@ export default function GameRoom() {
                 turnEndsAt: Timestamp.fromMillis(Date.now() + TURN_DURATION * 1000),
                 correctGuessers: []
             });
-            
-            // Non-critical updates can be batched outside the transaction for performance
         });
 
         const batch = writeBatch(db);
@@ -135,9 +138,13 @@ export default function GameRoom() {
 
     const unsubGame = onSnapshot(gameDocRef, (docSnap) => {
         if(docSnap.exists()) {
-            setGame(docSnap.data() as Game);
+            const gameData = docSnap.data() as Game;
+            if (gameData.status === 'playing') {
+                setGame(gameData);
+            } else if (gameData.status === 'ended') {
+                setGame(gameData);
+            }
         } else {
-            // If game state is deleted or doesn't exist, go back to lobby
             toast({ title: 'Game has ended', description: 'Returning to the lobby.' });
             router.push(`/room/${roomId}`);
             setGame(null);
@@ -162,8 +169,8 @@ export default function GameRoom() {
     const messagesColRef = collection(db, 'rooms', roomId as string, 'messages');
     const drawingColRef = collection(db, 'rooms', roomId as string, 'drawingPoints');
     
-    const qMessages = query(messagesColRef, orderBy('timestamp'));
-    const qDrawing = query(drawingColRef, orderBy('timestamp'));
+    const qMessages = query(messagesColRef, orderBy('timestamp', 'asc'));
+    const qDrawing = query(drawingColRef, orderBy('timestamp', 'asc'));
 
     const unsubMessages = onSnapshot(qMessages, (snapshot) => {
         const messageList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Message));
@@ -219,9 +226,9 @@ export default function GameRoom() {
 
         try {
             await runTransaction(db, async (transaction) => {
-                const gameDocRef = doc(db, 'rooms', roomId, 'game', 'gameState');
-                const playerDocRef = doc(db, 'rooms', roomId, 'players', user.uid);
-                const drawerDocRef = doc(db, 'rooms', roomId, 'players', game.currentDrawerId);
+                const gameDocRef = doc(db, 'rooms', roomId as string, 'game', 'gameState');
+                const playerDocRef = doc(db, 'rooms', roomId as string, 'players', user.uid);
+                const drawerDocRef = doc(db, 'rooms', roomId as string, 'players', game.currentDrawerId);
 
                 const gameDoc = await transaction.get(gameDocRef);
                 const playerDoc = await transaction.get(playerDocRef);
@@ -244,15 +251,15 @@ export default function GameRoom() {
                     playerName: playerDoc.data()?.name || 'Anonymous',
                     timestamp: serverTimestamp()
                 };
-                const messagesCollection = collection(db, 'rooms', roomId, 'messages');
+                const messagesCollection = collection(db, 'rooms', roomId as string, 'messages');
                 transaction.set(doc(messagesCollection), correctMsg);
             });
             // After successful transaction, host checks if turn should end
             if (isHost) {
-                const gameDocAfter = await getDoc(doc(db, 'rooms', roomId, 'game', 'gameState'));
+                const gameDocAfter = await getDoc(doc(db, 'rooms', roomId as string, 'game', 'gameState'));
                 if (gameDocAfter.exists()) {
                     const { correctGuessers } = gameDocAfter.data();
-                    const playersSnapshot = await getDocs(collection(db, 'rooms', roomId, 'players'));
+                    const playersSnapshot = await getDocs(collection(db, 'rooms', roomId as string, 'players'));
                     const nonDrawerPlayersCount = playersSnapshot.size - 1;
                     if (correctGuessers.length >= nonDrawerPlayersCount) {
                         await startNextTurn();
@@ -283,8 +290,8 @@ export default function GameRoom() {
 
   const handleGetHint = async () => {
     if (!game) return;
-    const drawingDescription = "A player's drawing"; // In a more advanced version, this could come from canvas analysis
-    const recentGuesses = messages.filter(m => m.type === 'guess').slice(-5).map(m => m.text); // Get last 5 guesses
+    const drawingDescription = "A player's drawing";
+    const recentGuesses = messages.filter(m => m.type === 'guess').slice(-5).map(m => m.text);
     
     const hint = await getAiHintAction(drawingDescription, recentGuesses);
     
@@ -342,50 +349,70 @@ export default function GameRoom() {
   const turnEndsAt = game.turnEndsAt ? (game.turnEndsAt as Timestamp).toMillis() : Date.now() + (TURN_DURATION * 1000);
 
   return (
-    <main className="grid grid-cols-1 lg:grid-cols-[250px_1fr_300px] grid-rows-[auto_1fr_auto] gap-4 p-4 h-screen max-h-screen overflow-hidden">
-      {game.status === 'ended' && <GameEndDialog players={players} onPlayAgain={() => router.push('/')} />}
-      <header className="lg:col-span-3 flex flex-col md:flex-row gap-4 justify-between items-center">
-        <h1 className="text-2xl font-bold text-primary">SketchVerse</h1>
-        <WordDisplay word={game.currentWord} isDrawer={isDrawer} youGuessedIt={youGuessedIt} />
-        <div className="text-lg font-bold">Round {game.round}/{TOTAL_ROUNDS}</div>
-      </header>
+    <main className="flex flex-col h-screen max-h-screen overflow-hidden bg-background text-foreground">
+        {game.status === 'ended' && <GameEndDialog players={players} onPlayAgain={() => router.push('/')} />}
+        
+        <header className="flex flex-col sm:flex-row gap-2 justify-between items-center p-2 border-b">
+            <h1 className="text-xl md:text-2xl font-bold text-primary">SketchVerse</h1>
+            <WordDisplay word={game.currentWord} isDrawer={isDrawer} youGuessedIt={youGuessedIt} />
+            <div className="text-base md:text-lg font-bold">Round {game.round}/{TOTAL_ROUNDS}</div>
+        </header>
 
-      <aside className="hidden lg:flex flex-col gap-4 row-start-2">
-        <Scoreboard players={players} currentDrawerId={game.currentDrawerId} />
-      </aside>
+        <div className="flex-1 grid grid-cols-1 lg:grid-cols-[1fr_auto] min-h-0">
+            {/* Main content: Canvas and Toolbar */}
+            <div className="flex flex-col min-h-0">
+                <div className="relative flex-1 bg-card rounded-lg border m-2">
+                    <DrawingCanvas 
+                        toolSettings={toolSettings} 
+                        isDrawer={isDrawer} 
+                        initialPoints={drawingPoints}
+                        onDraw={handleDraw}
+                        gameStatus={game.status}
+                    />
+                </div>
+                <footer className="flex items-center justify-center p-2">
+                    {isDrawer ? (
+                        <Toolbar 
+                            toolSettings={toolSettings} 
+                            onSettingsChange={setToolSettings} 
+                            onClear={handleClearCanvas}
+                        />
+                    ) : (
+                        <p className="text-muted-foreground">Guess what the drawing is!</p>
+                    )}
+                </footer>
+            </div>
 
-      <div className="relative row-start-2 lg:col-start-2 bg-card rounded-lg border flex items-center justify-center">
-        <DrawingCanvas 
-            toolSettings={toolSettings} 
-            isDrawer={isDrawer} 
-            initialPoints={drawingPoints}
-            onDraw={handleDraw}
-            gameStatus={game.status}
-        />
-      </div>
+            {/* Sidebar: Scoreboard and Chat */}
+            <aside className="w-full lg:w-[320px] flex flex-col gap-2 p-2 border-l bg-background/50">
+                <Collapsible open={isScoreboardOpen} onOpenChange={setIsScoreboardOpen} className="hidden lg:block">
+                    <CollapsibleTrigger asChild>
+                        <Button variant="ghost" size="sm" className="w-full justify-between">
+                            Scoreboard
+                            <ChevronsRight className={cn("transition-transform", isScoreboardOpen && "rotate-90")}/>
+                        </Button>
+                    </CollapsibleTrigger>
+                    <CollapsibleContent>
+                        <Scoreboard players={players} currentDrawerId={game.currentDrawerId} />
+                    </CollapsibleContent>
+                </Collapsible>
 
-      <aside className="flex flex-col gap-4 row-start-3 lg:row-start-2 lg:col-start-3">
-        <ChatPanel
-          messages={messages}
-          turnEndsAt={turnEndsAt}
-          isDrawer={isDrawer}
-          isGuessed={youGuessedIt || false}
-          onSendMessage={handleSendMessage}
-          onGetHint={handleGetHint}
-        />
-      </aside>
-
-      <footer className="lg:col-start-2 flex items-center justify-center row-start-4 lg:row-start-3">
-        {isDrawer ? (
-            <Toolbar 
-                toolSettings={toolSettings} 
-                onSettingsChange={setToolSettings} 
-                onClear={handleClearCanvas}
-            />
-        ) : (
-            <p className="text-muted-foreground">Guess what the drawing is!</p>
-        )}
-      </footer>
+                <div className="hidden lg:block">
+                  <Scoreboard players={players} currentDrawerId={game.currentDrawerId} />
+                </div>
+                
+                <ChatPanel
+                  messages={messages}
+                  turnEndsAt={turnEndsAt}
+                  isDrawer={isDrawer}
+                  isGuessed={youGuessedIt || false}
+                  onSendMessage={handleSendMessage}
+                  onGetHint={handleGetHint}
+                />
+            </aside>
+        </div>
     </main>
   );
 }
+
+    
