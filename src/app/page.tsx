@@ -92,7 +92,7 @@ export default function HomePage() {
         </Card>
       </div>
       <footer className="mt-16 text-sm text-muted-foreground z-10">
-        <p>Crafted with AI magic & pixels ✨</p>
+        <p>Built with love ❤️ by Ankit Kumar</p>
       </footer>
     </main>
   );
