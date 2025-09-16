@@ -24,41 +24,58 @@ export const DrawingCanvas = forwardRef<HTMLCanvasElement, DrawingCanvasProps>((
     const context = contextRef.current;
     if (!canvas || !context) return;
     
+    // Clear the canvas completely
     context.clearRect(0, 0, canvas.width, canvas.height);
 
     if (points.length === 0) return;
 
-    let lastPoint: DrawingPoint | null = null;
+    let lastSettings: ToolSettings | null = null;
+    let isPathStarted = false;
 
-    points.forEach((p) => {
-        if(p.type === 'clear') {
+    // A more robust rendering logic
+    for (let i = 0; i < points.length; i++) {
+        const p = points[i];
+
+        if (p.type === 'clear') {
             context.clearRect(0, 0, canvas.width, canvas.height);
-            lastPoint = null;
-            return;
+            isPathStarted = false;
+            continue;
         }
 
-        if (!p.settings || !p.coords) return;
-
-        context.strokeStyle = p.settings.color;
-        context.lineWidth = p.settings.brushSize;
+        if (!p.coords || !p.settings) continue;
+        
+        // Apply new settings if they have changed
+        if (!lastSettings || lastSettings.color !== p.settings.color || lastSettings.brushSize !== p.settings.brushSize) {
+            if (isPathStarted) {
+                context.stroke(); // End the previous path
+            }
+            context.beginPath(); // Start a new path for new settings
+            context.strokeStyle = p.settings.color;
+            context.lineWidth = p.settings.brushSize;
+            lastSettings = p.settings;
+            isPathStarted = false; // Force a moveTo
+        }
 
         if (p.type === 'start') {
+            if (isPathStarted) {
+                context.stroke(); // End previous path
+            }
             context.beginPath();
             context.moveTo(p.coords.x, p.coords.y);
+            isPathStarted = true;
+        } else if (p.type === 'draw' && isPathStarted) {
+            context.lineTo(p.coords.x, p.coords.y);
+        } else if (p.type === 'end') {
+            if (isPathStarted) {
+                context.stroke();
+            }
+            isPathStarted = false;
         }
-        
-        if ((p.type === 'draw' || p.type === 'start') && lastPoint?.coords) {
-             context.lineTo(p.coords.x, p.coords.y);
-             context.stroke();
-        }
-        
-        if (p.type === 'end') {
-            context.closePath();
-            lastPoint = null;
-        } else {
-            lastPoint = p;
-        }
-    });
+    }
+    // Stroke any remaining path
+    if (isPathStarted) {
+        context.stroke();
+    }
   };
 
   useEffect(() => {
@@ -79,6 +96,7 @@ export const DrawingCanvas = forwardRef<HTMLCanvasElement, DrawingCanvasProps>((
                 context.lineCap = 'round';
                 context.lineJoin = 'round';
                 contextRef.current = context;
+                // Redraw with existing points after resize
                 redraw(initialPoints);
             }
         }
@@ -88,7 +106,7 @@ export const DrawingCanvas = forwardRef<HTMLCanvasElement, DrawingCanvasProps>((
 
     return () => resizeObserver.disconnect();
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, []); // Redraw will be triggered by the points dependency
 
   useEffect(() => {
     redraw(initialPoints);
@@ -104,8 +122,8 @@ export const DrawingCanvas = forwardRef<HTMLCanvasElement, DrawingCanvasProps>((
     if(!event) return { x: 0, y: 0};
     
     return { 
-        x: (event.clientX - rect.left), 
-        y: (event.clientY - rect.top)
+        x: event.clientX - rect.left, 
+        y: event.clientY - rect.top
     };
   }
 
@@ -113,15 +131,16 @@ export const DrawingCanvas = forwardRef<HTMLCanvasElement, DrawingCanvasProps>((
     if (!isDrawer) return;
     e.preventDefault();
     const { x, y } = getCoords(e.nativeEvent);
-    onDraw({ type: 'start', coords: { x, y }, settings: toolSettings });
     setIsDrawing(true);
+    onDraw({ type: 'start', coords: { x, y }, settings: toolSettings });
   };
 
   const finishDrawing = (e: React.MouseEvent<HTMLCanvasElement> | React.TouchEvent<HTMLCanvasElement>) => {
     if (!isDrawer || !isDrawing) return;
     e.preventDefault();
+    const { x, y } = getCoords(e.nativeEvent);
     setIsDrawing(false);
-    onDraw({ type: 'end', coords: { x: -1, y: -1 }, settings: toolSettings });
+    onDraw({ type: 'end', coords: { x, y }, settings: toolSettings });
   };
 
   const draw = (e: React.MouseEvent<HTMLCanvasElement> | React.TouchEvent<HTMLCanvasElement>) => {
@@ -144,14 +163,9 @@ export const DrawingCanvas = forwardRef<HTMLCanvasElement, DrawingCanvasProps>((
             onTouchMove={draw}
             className={cn("absolute top-0 left-0 w-full h-full bg-card rounded-lg border", isDrawer ? "cursor-crosshair" : "cursor-not-allowed")}
         />
-        {!isDrawer && gameStatus === 'playing' && (
-            <div className="absolute inset-0 flex items-center justify-center bg-transparent rounded-lg pointer-events-none">
-                {/* This div is now transparent and doesn't block the view */}
-            </div>
-        )}
-         {!isDrawer && gameStatus !== 'playing' && (
-             <div className="absolute inset-0 flex items-center justify-center bg-card/80 backdrop-blur-sm rounded-lg">
-                <p className="text-muted-foreground font-medium">Waiting for the drawer...</p>
+        {gameStatus !== 'playing' && (
+             <div className="absolute inset-0 flex items-center justify-center bg-card/80 backdrop-blur-sm rounded-lg pointer-events-none">
+                <p className="text-muted-foreground font-medium">Waiting for the game to start...</p>
             </div>
         )}
     </>
