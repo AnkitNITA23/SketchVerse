@@ -145,7 +145,7 @@ export default function GameRoom() {
         setLoading(false);
     });
     
-    const unsubPlayers = onSnapshot(query(playersColRef, orderBy('joinedAt')), (snapshot) => {
+    const unsubPlayers = onSnapshot(query(playersColRef, orderBy('score', 'desc')), (snapshot) => {
         const playersList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data()} as Player));
         setPlayers(playersList);
     });
@@ -360,6 +360,7 @@ export default function GameRoom() {
             isDrawer={isDrawer} 
             initialPoints={drawingPoints}
             onDraw={handleDraw}
+            gameStatus={game.status}
         />
       </div>
 

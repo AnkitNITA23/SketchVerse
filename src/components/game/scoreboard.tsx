@@ -1,4 +1,5 @@
 import type { FC } from 'react';
+import React from 'react';
 import { Crown, Paintbrush } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
@@ -12,7 +13,10 @@ interface ScoreboardProps {
 }
 
 export const Scoreboard: FC<ScoreboardProps> = ({ players, currentDrawerId }) => {
-  const sortedPlayers = [...players].sort((a, b) => b.score - a.score);
+  const sortedPlayers = React.useMemo(() => {
+    return [...players].sort((a, b) => b.score - a.score);
+  }, [players]);
+
   const topPlayerId = sortedPlayers.length > 0 ? sortedPlayers[0].id : null;
 
   return (
@@ -47,5 +51,3 @@ export const Scoreboard: FC<ScoreboardProps> = ({ players, currentDrawerId }) =>
     </Card>
   );
 };
-
-    

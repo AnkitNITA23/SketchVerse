@@ -16,21 +16,11 @@ interface ToolbarProps {
 }
 
 const COLORS = ['#FFFFFF', '#EF4444', '#F97316', '#EAB308', '#22C55E', '#3B82F6', '#A855F7', '#EC4899', '#64748B', '#000000'];
+const ERASER_COLOR = 'hsl(222 84% 4.9%)'; // This should match the --card HSL value in globals.css for dark mode
 
 export const Toolbar: FC<ToolbarProps> = ({ toolSettings, onSettingsChange, onClear }) => {
   
-  const eraserColor = useMemo(() => {
-    // This is a trick to get the background color of the canvas
-    // In a real app, this should be handled more elegantly e.g. via CSS variables
-    if (typeof window !== 'undefined') {
-        const style = window.getComputedStyle(document.body);
-        const cardColor = style.getPropertyValue('--card');
-        if (cardColor) return `hsl(${cardColor.trim()})`;
-    }
-    return 'hsl(222 84% 4.9%)'; // Fallback to the default dark card color
-  }, []);
-
-  const isEraser = toolSettings.color === eraserColor;
+  const isEraser = toolSettings.color === ERASER_COLOR;
 
   const handleColorChange = (color: string) => {
     onSettingsChange({ ...toolSettings, color });
@@ -41,7 +31,7 @@ export const Toolbar: FC<ToolbarProps> = ({ toolSettings, onSettingsChange, onCl
   };
 
   const handleEraser = () => {
-    onSettingsChange({ ...toolSettings, color: eraserColor });
+    onSettingsChange({ ...toolSettings, color: ERASER_COLOR });
   };
   
   return (
@@ -97,5 +87,3 @@ export const Toolbar: FC<ToolbarProps> = ({ toolSettings, onSettingsChange, onCl
     </div>
   );
 };
-
-    
