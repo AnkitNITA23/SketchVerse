@@ -15,26 +15,19 @@ interface DrawingCanvasProps {
   gameStatus: 'playing' | 'ended' | 'waiting';
 }
 
-const THROTTLE_MS = 50; // Send updates more frequently for smoother drawing
+const THROTTLE_MS = 50;
 
 export const DrawingCanvas = forwardRef<HTMLCanvasElement, DrawingCanvasProps>(({ toolSettings, isDrawer, initialPoints, onDraw, gameStatus }, ref) => {
   const internalRef = useRef<HTMLCanvasElement>(null);
   const canvasRef = (ref as React.RefObject<HTMLCanvasElement>) || internalRef;
-  const contextRef = useRef<CanvasRenderingContext2D | null>(null);
+  const localCanvasRef = useRef<HTMLCanvasElement>(null); // For immediate drawing feedback
+  
   const [isDrawing, setIsDrawing] = useState(false);
   
   const lastDrawTime = useRef(0);
   const batchedPoints = useRef<Omit<DrawingPoint, 'timestamp'>[]>([]);
 
-  const sendBatchedPoints = () => {
-    if (batchedPoints.current.length > 0) {
-      batchedPoints.current.forEach(p => onDraw(p));
-      batchedPoints.current = [];
-    }
-  };
-
-  const redraw = () => {
-    const canvas = canvasRef.current;
+  const redraw = (canvas: HTMLCanvasElement | null, pointsToDraw: DrawingPoint[]) => {
     if (!canvas) return;
     const context = canvas.getContext('2d');
     if (!context) return;
@@ -42,85 +35,75 @@ export const DrawingCanvas = forwardRef<HTMLCanvasElement, DrawingCanvasProps>((
     context.clearRect(0, 0, canvas.width, canvas.height);
 
     let lastPoint: DrawingPoint | null = null;
-    let currentPathPoints: DrawingPoint[] = [];
 
-    const strokePath = (pathPoints: DrawingPoint[]) => {
-      if (pathPoints.length < 2 || !pathPoints[0].settings) return;
-      
-      const firstPoint = pathPoints[0];
-      const scaledBrushSize = firstPoint.settings.brushSize * (canvas.width / 1000); // Scale brush size
-      
-      context.strokeStyle = firstPoint.settings.color;
-      context.lineWidth = scaledBrushSize;
-      context.lineCap = 'round';
-      context.lineJoin = 'round';
-      context.globalCompositeOperation = firstPoint.settings.color === ERASER_COLOR ? 'destination-out' : 'source-over';
-      
-      context.beginPath();
-      context.moveTo(firstPoint.coords!.x * canvas.width, firstPoint.coords!.y * canvas.height);
-
-      for (let i = 1; i < pathPoints.length; i++) {
-        const point = pathPoints[i];
-        context.lineTo(point.coords!.x * canvas.width, point.coords!.y * canvas.height);
-      }
-      context.stroke();
-    };
-
-    initialPoints.forEach(point => {
+    pointsToDraw.forEach(point => {
       if (point.type === 'clear') {
         context.clearRect(0, 0, canvas.width, canvas.height);
-        currentPathPoints = [];
+        lastPoint = null;
         return;
       }
 
       if (!point.coords || !point.settings) return;
 
-      if (point.type === 'start') {
-        if (currentPathPoints.length > 0) {
-          strokePath(currentPathPoints);
-        }
-        currentPathPoints = [point];
-      } else if (point.type === 'draw') {
-        currentPathPoints.push(point);
-      } else if (point.type === 'end') {
-        currentPathPoints.push(point);
-        strokePath(currentPathPoints);
-        currentPathPoints = [];
+      const scaledBrushSize = point.settings.brushSize * (canvas.width / 1000);
+      context.lineWidth = scaledBrushSize;
+      context.strokeStyle = point.settings.color;
+      context.globalCompositeOperation = point.settings.color === ERASER_COLOR ? 'destination-out' : 'source-over';
+      context.lineCap = 'round';
+      context.lineJoin = 'round';
+
+      const x = point.coords.x * canvas.width;
+      const y = point.coords.y * canvas.height;
+
+      if ((point.type === 'start' || point.type === 'end') && lastPoint?.type !== 'draw') {
+        context.beginPath();
+        context.arc(x, y, scaledBrushSize/2, 0, 2*Math.PI);
+        context.fillStyle = point.settings.color;
+        context.fill();
+      } else if(lastPoint && lastPoint.coords) {
+         context.beginPath();
+         context.moveTo(lastPoint.coords.x * canvas.width, lastPoint.coords.y * canvas.height);
+         context.lineTo(x, y);
+         context.stroke();
       }
-      lastPoint = point;
+      
+      if (point.type === 'end') {
+          lastPoint = null;
+      } else {
+          lastPoint = point;
+      }
     });
 
-    if (currentPathPoints.length > 0) {
-      strokePath(currentPathPoints);
-    }
-    
-    // Reset composite operation
     context.globalCompositeOperation = 'source-over';
   };
   
+  // Resize handler
   useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
+    const mainCanvas = canvasRef.current;
+    const localCanvas = localCanvasRef.current;
+    if (!mainCanvas || !localCanvas) return;
     
-    const parent = canvas.parentElement;
+    const parent = mainCanvas.parentElement;
     if(!parent) return;
 
     const resizeObserver = new ResizeObserver(entries => {
         for (const entry of entries) {
             const { width, height } = entry.contentRect;
-            canvas.width = width;
-            canvas.height = height;
-            contextRef.current = canvas.getContext('2d');
-            redraw();
+            mainCanvas.width = width;
+            mainCanvas.height = height;
+            localCanvas.width = width;
+            localCanvas.height = height;
+            redraw(mainCanvas, initialPoints);
         }
     });
     resizeObserver.observe(parent);
     return () => resizeObserver.disconnect();
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [initialPoints]); // Redraw with initialPoints when canvas resizes
   
+  // Redraw main canvas when points update
   useEffect(() => {
-    redraw();
+    redraw(canvasRef.current, initialPoints);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialPoints]);
 
@@ -131,17 +114,23 @@ export const DrawingCanvas = forwardRef<HTMLCanvasElement, DrawingCanvasProps>((
     const event = e instanceof MouseEvent ? e : e.touches[0];
     if(!event) return null;
     
-    return { 
-        x: (event.clientX - rect.left) / canvas.width, 
-        y: (event.clientY - rect.top) / canvas.height
-    };
+    // Normalize coordinates to be between 0 and 1
+    let x = (event.clientX - rect.left) / rect.width;
+    let y = (event.clientY - rect.top) / rect.height;
+
+    // Clamp coordinates to prevent drawing outside the canvas
+    x = Math.max(0, Math.min(1, x));
+    y = Math.max(0, Math.min(1, y));
+    
+    return { x, y };
   }
   
   const addPointToBatch = (point: Omit<DrawingPoint, 'timestamp'>) => {
     batchedPoints.current.push(point);
     const now = Date.now();
     if(now - lastDrawTime.current > THROTTLE_MS) {
-        sendBatchedPoints();
+        batchedPoints.current.forEach(p => onDraw(p));
+        batchedPoints.current = [];
         lastDrawTime.current = now;
     }
   }
@@ -153,19 +142,6 @@ export const DrawingCanvas = forwardRef<HTMLCanvasElement, DrawingCanvasProps>((
     if (!coords) return;
     
     setIsDrawing(true);
-
-    const context = contextRef.current;
-    const canvas = canvasRef.current;
-    if (context && canvas) {
-        const scaledBrushSize = toolSettings.brushSize * (canvas.width / 1000);
-        context.lineWidth = scaledBrushSize;
-        context.strokeStyle = toolSettings.color;
-        context.globalCompositeOperation = toolSettings.color === ERASER_COLOR ? 'destination-out' : 'source-over';
-        context.lineCap = 'round';
-        context.lineJoin = 'round';
-        context.beginPath();
-        context.moveTo(coords.x * canvas.width, coords.y * canvas.height);
-    }
     
     const point: Omit<DrawingPoint, 'timestamp'> = { type: 'start', coords, settings: toolSettings };
     onDraw(point);
@@ -175,7 +151,10 @@ export const DrawingCanvas = forwardRef<HTMLCanvasElement, DrawingCanvasProps>((
     if (!isDrawer || !isDrawing) return;
     e.preventDefault();
     
-    sendBatchedPoints();
+    // Send any remaining points
+    batchedPoints.current.forEach(p => onDraw(p));
+    batchedPoints.current = [];
+
     const coords = getCoords(e.nativeEvent);
     if (coords) {
         const point: Omit<DrawingPoint, 'timestamp'> = { type: 'end', coords, settings: toolSettings };
@@ -183,8 +162,6 @@ export const DrawingCanvas = forwardRef<HTMLCanvasElement, DrawingCanvasProps>((
     }
     
     setIsDrawing(false);
-    contextRef.current?.closePath();
-    batchedPoints.current = [];
   };
 
   const draw = (e: React.MouseEvent<HTMLCanvasElement> | React.TouchEvent<HTMLCanvasElement>) => {
@@ -192,14 +169,6 @@ export const DrawingCanvas = forwardRef<HTMLCanvasElement, DrawingCanvasProps>((
     e.preventDefault();
     const coords = getCoords(e.nativeEvent);
     if (!coords) return;
-
-    // Draw locally for immediate feedback
-    const context = contextRef.current;
-    const canvas = canvasRef.current;
-    if (context && canvas) {
-        context.lineTo(coords.x * canvas.width, coords.y * canvas.height);
-        context.stroke();
-    }
     
     const point: Omit<DrawingPoint, 'timestamp'> = { type: 'draw', coords, settings: toolSettings };
     addPointToBatch(point);
@@ -207,8 +176,14 @@ export const DrawingCanvas = forwardRef<HTMLCanvasElement, DrawingCanvasProps>((
   
   return (
     <>
+        {/* The main canvas that shows the synchronized state */}
         <canvas
             ref={canvasRef}
+            className={cn("absolute top-0 left-0 w-full h-full bg-transparent")}
+        />
+        {/* A second canvas for the drawer's immediate input */}
+        <canvas
+            ref={localCanvasRef}
             onMouseDown={startDrawing}
             onMouseUp={finishDrawing}
             onMouseMove={draw}
@@ -216,7 +191,7 @@ export const DrawingCanvas = forwardRef<HTMLCanvasElement, DrawingCanvasProps>((
             onTouchStart={startDrawing}
             onTouchEnd={finishDrawing}
             onTouchMove={draw}
-            className={cn("absolute top-0 left-0 w-full h-full bg-transparent", isDrawer ? "cursor-crosshair" : "cursor-not-allowed")}
+            className={cn("absolute top-0 left-0 w-full h-full bg-transparent", isDrawer ? "cursor-crosshair" : "cursor-not-allowed", !isDrawer && gameStatus === 'playing' && 'hidden')}
         />
         {gameStatus !== 'playing' && (
              <div className="absolute inset-0 flex items-center justify-center bg-card/80 backdrop-blur-sm rounded-lg pointer-events-none">
@@ -225,10 +200,12 @@ export const DrawingCanvas = forwardRef<HTMLCanvasElement, DrawingCanvasProps>((
                 </p>
             </div>
         )}
+         {!isDrawer && gameStatus === 'playing' && (
+             <div className="absolute inset-0 flex items-center justify-center bg-transparent pointer-events-none">
+            </div>
+        )}
     </>
   );
 });
 
 DrawingCanvas.displayName = 'DrawingCanvas';
-
-    
