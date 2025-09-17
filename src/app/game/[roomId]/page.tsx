@@ -8,7 +8,7 @@ import { onAuthStateChanged, User } from 'firebase/auth';
 import { auth, db } from '@/lib/firebase';
 import { doc, onSnapshot, collection, addDoc, serverTimestamp, query, orderBy, runTransaction, Timestamp, writeBatch, getDocs, getDoc } from 'firebase/firestore';
 import { ChevronsLeft, ChevronsRight, Loader2 } from 'lucide-react';
-import type { Game, Player, Message, ToolSettings, DrawingPoint } from '@/lib/types';
+import type { Game, Player, Message, ToolSettings, DrawingPoint, RoundScore } from '@/lib/types';
 import { getAiHintAction } from '@/app/actions';
 import { MOCK_WORD_LIST } from '@/lib/mock-data';
 
@@ -18,6 +18,7 @@ import { ChatPanel } from '@/components/game/chat-panel';
 import { Toolbar } from '@/components/game/toolbar';
 import { WordDisplay } from '@/components/game/word-display';
 import { GameEndDialog } from '@/components/game/game-end-dialog';
+import { RoundEndDialog } from '@/components/game/round-end-dialog';
 import { Button } from '@/components/ui/button';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { cn } from '@/lib/utils';
@@ -36,6 +37,10 @@ export default function GameRoom() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [drawingPoints, setDrawingPoints] = useState<DrawingPoint[]>([]);
   const [isScoreboardOpen, setIsScoreboardOpen] = useState(false);
+  
+  const [lastRoundScores, setLastRoundScores] = useState<RoundScore[]>([]);
+  const [showRoundEndDialog, setShowRoundEndDialog] = useState(false);
+  const previousPlayersRef = useRef<Player[]>([]);
 
   const [toolSettings, setToolSettings] = useState<ToolSettings>({
     color: '#FFFFFF',
@@ -57,9 +62,36 @@ export default function GameRoom() {
     });
     return unsubscribe;
   }, [toast, router]);
+
+   const calculateRoundScores = useCallback((currentPlayers: Player[]) => {
+    const previousPlayers = previousPlayersRef.current;
+    if (previousPlayers.length === 0) return [];
+    
+    const scores: RoundScore[] = currentPlayers.map(player => {
+        const prevPlayer = previousPlayers.find(p => p.id === player.id);
+        const scoreChange = player.score - (prevPlayer?.score || 0);
+        return {
+            playerId: player.id,
+            playerName: player.name,
+            avatar: player.avatar,
+            points: scoreChange,
+        };
+    }).filter(rs => rs.points > 0).sort((a, b) => b.points - a.points);
+    
+    return scores;
+  }, []);
   
   const startNextTurn = useCallback(async () => {
     if (!isHost || !roomId) return;
+    
+    // First, show round scores
+    const currentPlayersSnapshot = await getDocs(query(collection(db, 'rooms', roomId as string, 'players'), orderBy('joinedAt')));
+    const currentPlayers = currentPlayersSnapshot.docs.map(d => ({ id: d.id, ...d.data() } as Player));
+    const roundScores = calculateRoundScores(currentPlayers);
+    if (roundScores.length > 0) {
+        setLastRoundScores(roundScores);
+        setShowRoundEndDialog(true);
+    }
     
     try {
         await runTransaction(db, async (transaction) => {
@@ -105,13 +137,14 @@ export default function GameRoom() {
         batch.set(doc(drawingPointsCollection), clearPoint);
 
         const playersColRef = collection(db, 'rooms', roomId as string, 'players');
-        const currentPlayersSnapshot = await getDocs(query(playersColRef, orderBy('joinedAt')));
-        const currentPlayers = currentPlayersSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Player));
+        const updatedPlayersSnapshot = await getDocs(query(playersColRef, orderBy('joinedAt')));
+        const updatedPlayers = updatedPlayersSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Player));
+        previousPlayersRef.current = updatedPlayers; // Update ref for next calculation
 
         const gameDocRef = doc(db, 'rooms', roomId as string, 'game', 'gameState');
         const gameDoc = await getDoc(gameDocRef);
         const { currentDrawerId } = gameDoc.data() as Game;
-        const nextDrawer = currentPlayers.find(p => p.id === currentDrawerId);
+        const nextDrawer = updatedPlayers.find(p => p.id === currentDrawerId);
         
         const messagesCollection = collection(db, 'rooms', roomId as string, 'messages');
         const systemMessage = {
@@ -127,7 +160,7 @@ export default function GameRoom() {
         console.error("Error starting next turn:", error);
         toast({ title: "Couldn't start the next turn.", variant: 'destructive'});
     }
-  }, [isHost, roomId, toast]);
+  }, [isHost, roomId, toast, calculateRoundScores]);
 
   // Game and Players state listener
   useEffect(() => {
@@ -155,6 +188,9 @@ export default function GameRoom() {
     const unsubPlayers = onSnapshot(query(playersColRef, orderBy('score', 'desc')), (snapshot) => {
         const playersList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data()} as Player));
         setPlayers(playersList);
+         if (previousPlayersRef.current.length === 0) {
+            previousPlayersRef.current = playersList;
+        }
     });
 
     return () => {
@@ -194,7 +230,7 @@ export default function GameRoom() {
         clearTimeout(turnTimeoutRef.current);
     }
 
-    if (game?.status !== 'playing') return;
+    if (game?.status !== 'playing' || showRoundEndDialog) return;
 
     if (game?.turnEndsAt && isHost) {
         const turnEndTime = (game.turnEndsAt as Timestamp).toMillis();
@@ -212,7 +248,7 @@ export default function GameRoom() {
     return () => {
         if(turnTimeoutRef.current) clearTimeout(turnTimeoutRef.current);
     }
-  }, [game?.turnEndsAt, game?.status, isHost, startNextTurn]);
+  }, [game?.turnEndsAt, game?.status, isHost, startNextTurn, showRoundEndDialog]);
 
   const handleSendMessage = async (text: string) => {
     if (!user || !roomId || !text.trim() || !game || game.status !== 'playing' || game.currentDrawerId === user.uid) return;
@@ -225,6 +261,7 @@ export default function GameRoom() {
         if (game.correctGuessers.includes(user.uid)) return;
 
         try {
+            let allGuessed = false;
             await runTransaction(db, async (transaction) => {
                 const gameDocRef = doc(db, 'rooms', roomId as string, 'game', 'gameState');
                 const playerDocRef = doc(db, 'rooms', roomId as string, 'players', user.uid);
@@ -235,14 +272,24 @@ export default function GameRoom() {
                 const drawerDoc = await transaction.get(drawerDocRef);
 
                 if (!gameDoc.exists() || !playerDoc.exists() || !drawerDoc.exists()) throw new Error("Game or player not found");
-                if (gameDoc.data().correctGuessers?.includes(user.uid)) return; // Already guessed
+                
+                const gameData = gameDoc.data();
+                if (gameData.correctGuessers?.includes(user.uid)) return; // Already guessed
 
-                const guesserPoints = 100; // Example points
-                const drawerPoints = 50;
+                const turnEndTime = (gameData.turnEndsAt as Timestamp).toMillis();
+                const timeTaken = Date.now();
+                const timeRemaining = Math.max(0, turnEndTime - timeTaken);
+                const basePoints = 50; 
+                const timeBonus = Math.floor((timeRemaining / (TURN_DURATION * 1000)) * 50);
+
+                const guesserPoints = basePoints + timeBonus;
+                const drawerPoints = 25; // Points for each correct guess
                 
                 transaction.update(playerDocRef, { score: (playerDoc.data()?.score || 0) + guesserPoints });
                 transaction.update(drawerDocRef, { score: (drawerDoc.data()?.score || 0) + drawerPoints });
-                transaction.update(gameDocRef, { correctGuessers: [...(gameDoc.data().correctGuessers || []), user.uid] });
+                
+                const updatedCorrectGuessers = [...(gameData.correctGuessers || []), user.uid];
+                transaction.update(gameDocRef, { correctGuessers: updatedCorrectGuessers });
 
                 const correctMsg = { 
                     text: `${playerDoc.data()?.name} guessed the word!`, 
@@ -253,18 +300,18 @@ export default function GameRoom() {
                 };
                 const messagesCollection = collection(db, 'rooms', roomId as string, 'messages');
                 transaction.set(doc(messagesCollection), correctMsg);
+
+                // Check if all non-drawers have guessed
+                const playersSnapshot = await getDocs(collection(db, 'rooms', roomId as string, 'players'));
+                const nonDrawerPlayersCount = playersSnapshot.docs.filter(p => p.id !== game.currentDrawerId).length;
+                if (updatedCorrectGuessers.length >= nonDrawerPlayersCount) {
+                    allGuessed = true;
+                }
             });
             // After successful transaction, host checks if turn should end
-            if (isHost) {
-                const gameDocAfter = await getDoc(doc(db, 'rooms', roomId as string, 'game', 'gameState'));
-                if (gameDocAfter.exists()) {
-                    const { correctGuessers } = gameDocAfter.data();
-                    const playersSnapshot = await getDocs(collection(db, 'rooms', roomId as string, 'players'));
-                    const nonDrawerPlayersCount = playersSnapshot.size - 1;
-                    if (correctGuessers.length >= nonDrawerPlayersCount) {
-                        await startNextTurn();
-                    }
-                }
+            if (isHost && allGuessed) {
+               if(turnTimeoutRef.current) clearTimeout(turnTimeoutRef.current);
+               await startNextTurn();
             }
         } catch (error) {
             console.error("Error processing correct guess: ", error);
@@ -351,6 +398,12 @@ export default function GameRoom() {
   return (
     <main className="flex flex-col h-screen max-h-screen overflow-hidden bg-background text-foreground">
         {game.status === 'ended' && <GameEndDialog players={players} onPlayAgain={() => router.push('/')} />}
+        {showRoundEndDialog && (
+            <RoundEndDialog 
+                scores={lastRoundScores} 
+                onClose={() => setShowRoundEndDialog(false)}
+            />
+        )}
         
         <header className="flex flex-col sm:flex-row gap-2 justify-between items-center p-2 border-b">
             <h1 className="text-xl md:text-2xl font-bold text-primary">SketchVerse</h1>
@@ -385,7 +438,7 @@ export default function GameRoom() {
 
             {/* Sidebar: Scoreboard and Chat */}
             <aside className="w-full lg:w-[320px] flex flex-col gap-2 p-2 border-l bg-background/50">
-                <Collapsible open={isScoreboardOpen} onOpenChange={setIsScoreboardOpen} className="hidden lg:block">
+                <Collapsible open={isScoreboardOpen} onOpenChange={setIsScoreboardOpen} className="lg:hidden">
                     <CollapsibleTrigger asChild>
                         <Button variant="ghost" size="sm" className="w-full justify-between">
                             Scoreboard

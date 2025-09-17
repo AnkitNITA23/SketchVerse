@@ -1,3 +1,4 @@
+
 import { FieldValue, Timestamp } from "firebase/firestore";
 
 export interface Player {
@@ -37,6 +38,13 @@ export interface DrawingPoint {
     coords?: { x: number; y: number };
     settings?: ToolSettings;
     timestamp?: FieldValue;
+}
+
+export interface RoundScore {
+  playerId: string;
+  playerName: string;
+  avatar: string;
+  points: number;
 }
 
 // Deprecated, use Game instead
