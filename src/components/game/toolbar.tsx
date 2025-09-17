@@ -11,11 +11,17 @@ import { cn } from '@/lib/utils';
 import { useMemo } from 'react';
 
 const COLORS = ['#FFFFFF', '#EF4444', '#F97316', '#EAB308', '#22C55E', '#3B82F6', '#A855F7', '#EC4899', '#64748B', '#000000'];
-export const ERASER_COLOR = 'hsl(222 84% 4.9%)';
+export const ERASER_COLOR_FLAG = 'ERASER';
+
+interface ToolbarProps {
+    toolSettings: ToolSettings;
+    onSettingsChange: (settings: ToolSettings) => void;
+    onClear: () => void;
+}
 
 export const Toolbar: FC<ToolbarProps> = ({ toolSettings, onSettingsChange, onClear }) => {
   
-  const isEraser = toolSettings.color === ERASER_COLOR;
+  const isEraser = toolSettings.color === ERASER_COLOR_FLAG;
 
   const handleColorChange = (color: string) => {
     onSettingsChange({ ...toolSettings, color });
@@ -26,7 +32,7 @@ export const Toolbar: FC<ToolbarProps> = ({ toolSettings, onSettingsChange, onCl
   };
 
   const handleEraser = () => {
-    onSettingsChange({ ...toolSettings, color: ERASER_COLOR });
+    onSettingsChange({ ...toolSettings, color: ERASER_COLOR_FLAG });
   };
   
   return (
