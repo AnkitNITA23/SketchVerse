@@ -26,6 +26,7 @@ export const DrawingCanvas = forwardRef<HTMLCanvasElement, DrawingCanvasProps>((
   
   const lastDrawTime = useRef(0);
   const batchedPoints = useRef<Omit<DrawingPoint, 'timestamp'>[]>([]);
+  const lastPointRef = useRef<{x: number, y: number} | null>(null);
 
   const redraw = (canvas: HTMLCanvasElement | null, pointsToDraw: DrawingPoint[]) => {
     if (!canvas) return;
@@ -44,7 +45,7 @@ export const DrawingCanvas = forwardRef<HTMLCanvasElement, DrawingCanvasProps>((
       }
 
       if (!point.coords || !point.settings) return;
-
+      
       const scaledBrushSize = point.settings.brushSize * (canvas.width / 1000);
       context.lineWidth = scaledBrushSize;
       context.strokeStyle = point.settings.color;
@@ -142,9 +143,27 @@ export const DrawingCanvas = forwardRef<HTMLCanvasElement, DrawingCanvasProps>((
     if (!coords) return;
     
     setIsDrawing(true);
-    
+    lastPointRef.current = coords;
+
     const point: Omit<DrawingPoint, 'timestamp'> = { type: 'start', coords, settings: toolSettings };
     onDraw(point);
+    
+    // Also draw starting point on local canvas
+    const localCtx = localCanvasRef.current?.getContext('2d');
+    const localCanvas = localCanvasRef.current;
+    if(localCtx && localCanvas) {
+      const scaledBrushSize = toolSettings.brushSize * (localCanvas.width / 1000);
+      localCtx.lineWidth = scaledBrushSize;
+      localCtx.strokeStyle = toolSettings.color;
+      localCtx.fillStyle = toolSettings.color;
+      localCtx.globalCompositeOperation = toolSettings.color === ERASER_COLOR ? 'destination-out' : 'source-over';
+      localCtx.lineCap = 'round';
+      localCtx.lineJoin = 'round';
+
+      localCtx.beginPath();
+      localCtx.arc(coords.x * localCanvas.width, coords.y * localCanvas.height, scaledBrushSize/2, 0, 2 * Math.PI);
+      localCtx.fill();
+    }
   };
 
   const finishDrawing = (e: React.MouseEvent<HTMLCanvasElement> | React.TouchEvent<HTMLCanvasElement>) => {
@@ -162,6 +181,15 @@ export const DrawingCanvas = forwardRef<HTMLCanvasElement, DrawingCanvasProps>((
     }
     
     setIsDrawing(false);
+    lastPointRef.current = null;
+
+    // Clear the local canvas after drawing is done to prevent artifacts
+    setTimeout(() => {
+        const localCtx = localCanvasRef.current?.getContext('2d');
+        if (localCtx) {
+            localCtx.clearRect(0, 0, localCanvasRef.current!.width, localCanvasRef.current!.height);
+        }
+    }, THROTTLE_MS + 10);
   };
 
   const draw = (e: React.MouseEvent<HTMLCanvasElement> | React.TouchEvent<HTMLCanvasElement>) => {
@@ -170,6 +198,25 @@ export const DrawingCanvas = forwardRef<HTMLCanvasElement, DrawingCanvasProps>((
     const coords = getCoords(e.nativeEvent);
     if (!coords) return;
     
+    // Draw on the local canvas for immediate feedback
+    const localCtx = localCanvasRef.current?.getContext('2d');
+    const localCanvas = localCanvasRef.current;
+
+    if (localCtx && localCanvas && lastPointRef.current) {
+        const scaledBrushSize = toolSettings.brushSize * (localCanvas.width / 1000);
+        localCtx.lineWidth = scaledBrushSize;
+        localCtx.strokeStyle = toolSettings.color;
+        localCtx.lineCap = 'round';
+        localCtx.lineJoin = 'round';
+        localCtx.globalCompositeOperation = toolSettings.color === ERASER_COLOR ? 'destination-out' : 'source-over';
+        
+        localCtx.beginPath();
+        localCtx.moveTo(lastPointRef.current.x * localCanvas.width, lastPointRef.current.y * localCanvas.height);
+        localCtx.lineTo(coords.x * localCanvas.width, coords.y * localCanvas.height);
+        localCtx.stroke();
+    }
+    lastPointRef.current = coords;
+
     const point: Omit<DrawingPoint, 'timestamp'> = { type: 'draw', coords, settings: toolSettings };
     addPointToBatch(point);
   };
